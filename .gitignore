@@ -1,0 +1,10 @@
+node_modules
+target/
+rustup-init.exe
+
+# Frontend build output
+apps/desktop/dist/
+apps/desktop/src-tauri/gen/schemas/
+
+# Logs
+*.log

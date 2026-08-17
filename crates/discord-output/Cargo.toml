@@ -1,0 +1,23 @@
+[package]
+name = "presencehub-discord-output"
+version = "0.1.0"
+edition = "2021"
+description = "PresenceHub Discord Rich Presence output"
+
+[dependencies]
+presencehub-core.path = "../../crates/core"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+
+# PeekNamedPipe: non-blocking frame drain after the handshake (answer PINGs,
+# consume CLOSE/ERROR). Win32 named pipes cannot be read non-blockingly
+# through std, so the transport peeks the pipe buffer directly.
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["namedpipeapi", "winnt", "minwindef", "winbase", "fileapi", "handleapi", "winerror"] }
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

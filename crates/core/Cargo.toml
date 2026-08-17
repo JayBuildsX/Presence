@@ -1,0 +1,14 @@
+[package]
+name = "presencehub-core"
+version = "0.1.0"
+edition = "2021"
+description = "PresenceHub core orchestrator"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true

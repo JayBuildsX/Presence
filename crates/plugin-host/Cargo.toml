@@ -1,0 +1,12 @@
+[package]
+name = "presencehub-plugin-host"
+version = "0.1.0"
+edition = "2021"
+description = "PresenceHub plugin host manager"
+
+[dependencies]
+presencehub-core.path = "../../crates/core"
+serde.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true

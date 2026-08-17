@@ -1,0 +1,8 @@
+{
+  "name": "presencehub",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/desktop"
+  ]
+}

@@ -1,0 +1,12 @@
+[package]
+name = "presencehub-flstudio"
+version = "0.1.0"
+edition = "2021"
+description = "PresenceHub FL Studio plugin"
+
+[dependencies]
+presencehub-core.path = "../../crates/core"
+presencehub-plugin-host.path = "../../crates/plugin-host"
+thiserror.workspace = true
+tracing.workspace = true
+winapi = { version = "0.3", features = ["winuser", "errhandlingapi"] }
