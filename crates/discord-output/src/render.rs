@@ -205,13 +205,13 @@ mod tests {
         // an application "name" in the SET_ACTIVITY payload that could be
         // mistaken for control of that line.
         let mut metadata = HashMap::new();
-        metadata.insert("large_image".to_string(), "league".to_string());
+        metadata.insert("large_image".to_string(), "antigravity_logo".to_string());
 
         let activity = Activity {
-            state: "Ahri • Draft Pick".to_string(),
-            details: Some("Summoner's Rift".to_string()),
+            state: "Dynamic Conversation Tracking".to_string(),
+            details: Some("Implement conversation detection".to_string()),
             timestamps: None,
-            application: Some("League of Legends".to_string()),
+            application: Some("Antigravity".to_string()),
             metadata,
         };
 
@@ -223,23 +223,23 @@ mod tests {
             "the activity payload must never carry an application name field"
         );
         // The only application identity available is the asset hover text.
-        assert_eq!(json["assets"]["large_text"], "League of Legends");
+        assert_eq!(json["assets"]["large_text"], "Antigravity");
     }
 
     #[test]
-    fn render_league_payload_uses_explicit_asset_key() {
-        // Regression: the League plugin sets an explicit `large_image`
+    fn render_antigravity_payload_uses_explicit_asset_key() {
+        // Regression: the Antigravity plugin sets an explicit `large_image`
         // metadata key so the icon resolves. The generic conversion must
         // forward that key to the Discord payload instead of falling back to
-        // the derived slug ("leagueoflegends") which Discord renders as `?`.
+        // the derived slug ("antigravity") which Discord renders as `?`.
         let mut metadata = HashMap::new();
-        metadata.insert("large_image".to_string(), "league".to_string());
+        metadata.insert("large_image".to_string(), "antigravity_logo".to_string());
 
         let activity = Activity {
-            state: "Ahri • Draft Pick".to_string(),
-            details: Some("Summoner's Rift".to_string()),
+            state: "Dynamic Conversation Tracking".to_string(),
+            details: Some("Implement conversation detection".to_string()),
             timestamps: None,
-            application: Some("League of Legends".to_string()),
+            application: Some("Antigravity".to_string()),
             metadata,
         };
 
@@ -248,34 +248,34 @@ mod tests {
         let assets = rendered
             .assets
             .as_ref()
-            .expect("league asset should be present");
+            .expect("antigravity asset should be present");
 
-        assert_eq!(assets.large_text.as_deref(), Some("League of Legends"));
-        assert_eq!(assets.large_image.as_deref(), Some("league"));
+        assert_eq!(assets.large_text.as_deref(), Some("Antigravity"));
+        assert_eq!(assets.large_image.as_deref(), Some("antigravity_logo"));
 
         // The serialized payload must carry the real asset key, not the
         // unregistered derived slug.
         let json = serde_json::to_value(&rendered).unwrap();
-        assert_eq!(json["assets"]["large_image"], "league");
-        assert_ne!(json["assets"]["large_image"], "leagueoflegends");
+        assert_eq!(json["assets"]["large_image"], "antigravity_logo");
+        assert_ne!(json["assets"]["large_image"], "antigravity");
     }
 
     #[test]
-    fn render_league_payload_carries_application_champion_and_map() {
-        // End-to-end: the League plugin's Activity (application identity,
-        // "champion • mode" state, map detail) must surface in the final
+    fn render_antigravity_payload_carries_application_task_and_heading() {
+        // End-to-end: the Antigravity plugin's Activity (application identity,
+        // section heading state, active task detail) must surface in the final
         // Discord payload in the expected fields.
         let mut metadata = HashMap::new();
-        metadata.insert("large_image".to_string(), "league".to_string());
+        metadata.insert("large_image".to_string(), "antigravity_logo".to_string());
 
         let activity = Activity {
-            state: "Ahri • Draft Pick".to_string(),
-            details: Some("Summoner's Rift".to_string()),
+            state: "Dynamic Conversation Tracking".to_string(),
+            details: Some("Implement conversation detection".to_string()),
             timestamps: Some(ActivityTimestamps {
                 start: Some(1234567890),
                 end: None,
             }),
-            application: Some("League of Legends".to_string()),
+            application: Some("Antigravity".to_string()),
             metadata,
         };
 
@@ -284,11 +284,11 @@ mod tests {
 
         let json = serde_json::to_value(&rendered).unwrap();
         // Application identity lands in the asset hover text.
-        assert_eq!(json["assets"]["large_text"], "League of Legends");
-        assert_eq!(json["assets"]["large_image"], "league");
-        // Champion and mode are the primary line; map is the detail line.
-        assert_eq!(json["state"], "Ahri • Draft Pick");
-        assert_eq!(json["details"], "Summoner's Rift");
+        assert_eq!(json["assets"]["large_text"], "Antigravity");
+        assert_eq!(json["assets"]["large_image"], "antigravity_logo");
+        // Section name is state; active task is details.
+        assert_eq!(json["state"], "Dynamic Conversation Tracking");
+        assert_eq!(json["details"], "Implement conversation detection");
         assert_eq!(json["timestamps"]["start"], 1234567890);
     }
 

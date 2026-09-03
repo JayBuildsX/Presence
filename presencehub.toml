@@ -6,6 +6,7 @@ poll_interval_ms = 1000
 
 [plugins]
 flstudio = true
+antigravity = true
 opencode = true
 
 [outputs]
@@ -14,5 +15,6 @@ discord = true
 discord_app_id = 1533559059125637311
 
 [outputs.discord_apps]
-"League of Legends" = 1537237947231899678
 "FL Studio" = 1537238265537634457
+"OpenCode" = 1538988824623972492
+"Antigravity" = 1440730997460172810

@@ -17,13 +17,14 @@
 #![cfg(windows)]
 
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
 // Dependencies (workspace)
 // ---------------------------------------------------------------------------
 
-use presencehub_core::activity::Activity;
+use presencehub_core::activity::{Activity, ActivityTimestamps};
 use presencehub_plugin_host::{Plugin, PluginError, PluginMetadata, WindowIdentity};
 
 // ---------------------------------------------------------------------------
@@ -36,6 +37,9 @@ use presencehub_plugin_host::{Plugin, PluginError, PluginMetadata, WindowIdentit
 /// and does not change between versions or projects. Popups like the Welcome
 /// wizard use a different class name (`TWelcomeWizard`).
 pub const FLSTUDIO_MAIN_WINDOW_CLASS: &str = "TFruityLoopsMainForm";
+
+/// Large image asset key on Discord.
+pub const ASSET_LARGE_IMAGE: &str = "fl_studio_logo";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -106,7 +110,7 @@ fn extract_version(title: &str) -> Option<String> {
     let end = rest.find(' ').unwrap_or(rest.len());
     let ver = &rest[..end];
     // Accept any non-empty string that starts with a digit
-    if !ver.is_empty() && ver.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+    if !ver.is_empty() && ver.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         Some(ver.to_string())
     } else {
         None
@@ -199,7 +203,7 @@ mod windows {
     }
 
     thread_local! {
-        static CANDIDATES: Cell<Option<Vec<WindowInfo>>> = Cell::new(None);
+        static CANDIDATES: Cell<Option<Vec<WindowInfo>>> = const { Cell::new(None) };
     }
 
     /// Callback for EnumWindows. Collects all visible windows whose class name
@@ -333,6 +337,8 @@ pub struct FlStudioPlugin {
     metadata: PluginMetadata,
     /// The last emitted activity, used for change detection.
     last_activity: Option<Activity>,
+    /// The start timestamp of the active FL Studio session.
+    session_start_time: Option<i64>,
 }
 
 impl FlStudioPlugin {
@@ -341,16 +347,19 @@ impl FlStudioPlugin {
         Self {
             metadata: PluginMetadata::new("FL Studio", "0.1.0"),
             last_activity: None,
+            session_start_time: None,
         }
     }
 
     /// Handle the application window being absent.
     ///
-    /// Forgets the previously emitted activity so the next identical
-    /// activity is published again when the application reopens. Returns
-    /// the poll error the runtime uses to end the session.
+    /// Forgets the previously emitted activity and resets the session start
+    /// timestamp so the next identical activity is published again when the
+    /// application reopens. Returns the poll error the runtime uses to end
+    /// the session.
     fn application_not_found(&mut self) -> Result<Option<Activity>, PluginError> {
         self.last_activity = None;
+        self.session_start_time = None;
         Err(PluginError::PollFailed(
             "FL Studio window not found".to_string(),
         ))
@@ -362,10 +371,24 @@ impl FlStudioPlugin {
     /// it differs from the last emitted activity. Split out of
     /// [`Plugin::poll`] so the deduplication state machine can be tested
     /// without a live FL Studio window.
-    fn observe_title(&mut self, title: &str) -> Result<Option<Activity>, PluginError> {
+    pub fn observe_title(&mut self, title: &str) -> Result<Option<Activity>, PluginError> {
         let parsed =
             parse_window_title(title).map_err(|e| PluginError::PollFailed(e.to_string()))?;
-        let activity = build_activity(&parsed);
+
+        // Initialize persistent session start time if this is a newly active session
+        let start_time = match self.session_start_time {
+            Some(ts) => ts,
+            None => {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                self.session_start_time = Some(now);
+                now
+            }
+        };
+
+        let activity = build_activity(&parsed, start_time);
 
         // Only emit if the activity changed.
         if self.last_activity.as_ref() != Some(&activity) {
@@ -420,23 +443,38 @@ impl Plugin for FlStudioPlugin {
 }
 
 /// Build a canonical Activity from parsed FL Studio title data.
-fn build_activity(parsed: &ParsedTitle) -> Activity {
-    let (state, details) = match &parsed.project {
+///
+/// Follows `zfi2/FL-Studio-Discord-RPC`:
+/// - `details`: "FL Studio <version>" (or "FL Studio" if version is unknown)
+/// - `state`: project name (e.g. "song.flp" or "song.flp*"), or "Empty project" when no project loaded
+/// - `timestamps`: persistent start timestamp when session started
+/// - `metadata`: "large_image" = "fl_studio_logo", "large_text" = details
+pub fn build_activity(parsed: &ParsedTitle, start_timestamp: i64) -> Activity {
+    let details = match &parsed.version {
+        Some(version) => format!("FL Studio {}", version),
+        None => "FL Studio".to_string(),
+    };
+
+    let state = match &parsed.project {
         Some(project) => {
-            let details = if parsed.has_unsaved_changes {
-                format!("Project: {}*", project)
+            if parsed.has_unsaved_changes {
+                format!("{}*", project)
             } else {
-                format!("Project: {}", project)
-            };
-            ("Editing".to_string(), Some(details))
+                project.clone()
+            }
         }
-        None => ("Idle".to_string(), None),
+        None => "Empty project".to_string(),
     };
 
     let mut metadata = HashMap::new();
+    metadata.insert("large_image".to_string(), ASSET_LARGE_IMAGE.to_string());
+    metadata.insert("large_text".to_string(), details.clone());
     metadata.insert("application".to_string(), "FL Studio".to_string());
     if let Some(ref v) = parsed.version {
         metadata.insert("version".to_string(), v.clone());
+    }
+    if let Some(ref p) = parsed.project {
+        metadata.insert("project".to_string(), p.clone());
     }
     metadata.insert(
         "unsaved".to_string(),
@@ -450,8 +488,11 @@ fn build_activity(parsed: &ParsedTitle) -> Activity {
 
     Activity {
         state,
-        details,
-        timestamps: None,
+        details: Some(details),
+        timestamps: Some(ActivityTimestamps {
+            start: Some(start_timestamp),
+            end: None,
+        }),
         application: Some("FL Studio".to_string()),
         metadata,
     }
@@ -640,15 +681,21 @@ mod tests {
             project: Some("my_song.flp".to_string()),
             has_unsaved_changes: false,
         };
-        let activity = build_activity(&parsed);
-        assert_eq!(activity.state, "Editing");
-        assert_eq!(activity.details, Some("Project: my_song.flp".to_string()));
+        let activity = build_activity(&parsed, 1700000000);
+        assert_eq!(activity.state, "my_song.flp");
+        assert_eq!(activity.details, Some("FL Studio 20".to_string()));
+        assert_eq!(activity.application.as_deref(), Some("FL Studio"));
         assert_eq!(
-            activity.metadata.get("application"),
-            Some(&"FL Studio".to_string())
+            activity.metadata.get("large_image"),
+            Some(&"fl_studio_logo".to_string())
+        );
+        assert_eq!(
+            activity.metadata.get("large_text"),
+            Some(&"FL Studio 20".to_string())
         );
         assert_eq!(activity.metadata.get("version"), Some(&"20".to_string()));
         assert_eq!(activity.metadata.get("unsaved"), Some(&"false".to_string()));
+        assert_eq!(activity.timestamps.unwrap().start, Some(1700000000));
     }
 
     #[test]
@@ -658,9 +705,9 @@ mod tests {
             project: Some("my_song.flp".to_string()),
             has_unsaved_changes: true,
         };
-        let activity = build_activity(&parsed);
-        assert_eq!(activity.state, "Editing");
-        assert_eq!(activity.details, Some("Project: my_song.flp*".to_string()));
+        let activity = build_activity(&parsed, 1700000000);
+        assert_eq!(activity.state, "my_song.flp*");
+        assert_eq!(activity.details, Some("FL Studio 21".to_string()));
         assert_eq!(activity.metadata.get("version"), Some(&"21".to_string()));
         assert_eq!(activity.metadata.get("unsaved"), Some(&"true".to_string()));
     }
@@ -672,13 +719,10 @@ mod tests {
             project: None,
             has_unsaved_changes: false,
         };
-        let activity = build_activity(&parsed);
-        assert_eq!(activity.state, "Idle");
-        assert!(activity.details.is_none());
-        assert_eq!(
-            activity.metadata.get("application"),
-            Some(&"FL Studio".to_string())
-        );
+        let activity = build_activity(&parsed, 1700000000);
+        assert_eq!(activity.state, "Empty project");
+        assert_eq!(activity.details, Some("FL Studio 20".to_string()));
+        assert_eq!(activity.application.as_deref(), Some("FL Studio"));
     }
 
     #[test]
@@ -688,9 +732,31 @@ mod tests {
             project: Some("track.flp".to_string()),
             has_unsaved_changes: false,
         };
-        let activity = build_activity(&parsed);
-        assert_eq!(activity.state, "Editing");
+        let activity = build_activity(&parsed, 1700000000);
+        assert_eq!(activity.state, "track.flp");
+        assert_eq!(activity.details, Some("FL Studio 2025".to_string()));
         assert_eq!(activity.metadata.get("version"), Some(&"2025".to_string()));
+    }
+
+    #[test]
+    fn timestamp_persists_across_title_updates() {
+        let mut plugin = FlStudioPlugin::new();
+        let act1 = plugin
+            .observe_title("song.flp - FL Studio 2025")
+            .unwrap()
+            .unwrap();
+        let ts1 = act1.timestamps.unwrap().start;
+        assert!(ts1.is_some());
+
+        let act2 = plugin
+            .observe_title("other.flp - FL Studio 2025")
+            .unwrap()
+            .unwrap();
+        let ts2 = act2.timestamps.unwrap().start;
+        assert_eq!(
+            ts1, ts2,
+            "session start timestamp must not reset on title update"
+        );
     }
 
     // -- Plugin tests ----------------------------------------------------------

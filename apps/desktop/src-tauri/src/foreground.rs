@@ -180,18 +180,18 @@ mod tests {
     #[test]
     fn resolves_first_matching_source() {
         let window = ForegroundWindow {
-            process_name: Some("league of legends.exe".to_string()),
+            process_name: Some("antigravity.exe".to_string()),
             window_class: Some("Chrome_WidgetWin_1".to_string()),
         };
         let fl = WindowIdentity::new(["fl64.exe"], ["TFruityLoopsMainForm"]);
-        let league = WindowIdentity::new(["League of Legends.exe"], Vec::<String>::new());
+        let antigravity = WindowIdentity::new(["antigravity.exe"], Vec::<String>::new());
 
         assert_eq!(
             resolve_foreground_source(
                 &window,
-                &[("FL Studio", &fl), ("League of Legends", &league)]
+                &[("FL Studio", &fl), ("Antigravity", &antigravity)]
             ),
-            Some("League of Legends")
+            Some("Antigravity")
         );
     }
 
@@ -221,8 +221,8 @@ mod tests {
     #[test]
     fn base_name_extraction() {
         assert_eq!(
-            base_name_of(r"C:\Riot Games\League of Legends\League of Legends.exe"),
-            "league of legends.exe"
+            base_name_of(r"C:\Users\HP\AppData\Local\Programs\Antigravity\antigravity.exe"),
+            "antigravity.exe"
         );
         assert_eq!(base_name_of("fl64.exe"), "fl64.exe");
     }

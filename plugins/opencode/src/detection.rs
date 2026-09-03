@@ -135,6 +135,48 @@ pub fn read_window_state() -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
+/// The workspace state file prefix.
+pub const WORKSPACE_STATE_PREFIX: &str = "opencode.workspace.";
+
+/// Finds all OpenCode workspace state files.
+///
+/// OpenCode persists per-project UI state (model selection, file views,
+/// terminal layout) to `opencode.workspace.<slug>.dat` files in the data
+/// directory. The slug encodes the project path, so discovery scans the
+/// directory rather than deriving a name from a directory path.
+pub fn workspace_state_files() -> Vec<PathBuf> {
+    let Some(dir) = data_dir() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(WORKSPACE_STATE_PREFIX) && name.ends_with(WINDOW_STATE_SUFFIX) {
+            files.push(entry.path());
+        }
+    }
+    files
+}
+
+/// Reads the viewed-file list for a session from the workspace state files.
+///
+/// Returns the first non-empty file-view found across all workspace files
+/// for the given session, or `None` when no workspace file records one.
+pub fn read_file_view(session_id: &str) -> Option<Vec<String>> {
+    for path in workspace_state_files() {
+        let content = std::fs::read_to_string(&path).ok()?;
+        let files = crate::state::parse_file_view(&content, session_id);
+        if !files.is_empty() {
+            return Some(files);
+        }
+    }
+    None
+}
+
 /// Extracts the human-readable project name from a filesystem path.
 ///
 /// Returns the last path component (the directory name). This deliberately
@@ -152,6 +194,55 @@ pub fn project_name_from_path(path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Creates a temporary data directory populated with fixture window and
+    /// workspace state files, sets `PRESENCEHUB_OPENCODE_DATA_DIR` to it, and
+    /// returns a guard that restores the environment and removes the
+    /// directory on drop. The fixture mirrors the shapes OpenCode writes.
+    struct DataDirGuard {
+        dir: PathBuf,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl DataDirGuard {
+        fn new() -> Self {
+            let lock = TEST_LOCK.lock().unwrap();
+            let dir = std::env::temp_dir()
+                .join(format!("presencehub_opencode_test_{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+
+            std::fs::write(
+                dir.join("opencode.window.test.dat"),
+                r#"{
+                    "tabs": "[{\"type\":\"session\",\"server\":\"sidecar\",\"sessionId\":\"ses_active\"}]",
+                    "tabs.recent": "{\"key\":\"sidecar\\n/server/c2lkZWNhcg/session/ses_active\"}",
+                    "tabs.info": "{\"sidecar\\n/server/c2lkZWNhcg/session/ses_active\":{\"title\":\"Working\",\"directory\":\"C:\\\\Users\\\\HP\\\\Desktop\\\\MyProject\"}}"
+                }"#,
+            )
+            .unwrap();
+
+            std::fs::write(
+                dir.join("opencode.workspace.test.dat"),
+                r#"{
+                    "session:ses_active:file-view": "{\"file\":{\"src/main.rs\":{\"selectedLines\":{\"start\":1,\"end\":1}},\"src/app.ts\":{\"selectedLines\":{\"start\":5,\"end\":5}}}}",
+                    "workspace:vcs": "{\"value\":{\"branch\":\"main\"}}"
+                }"#,
+            )
+            .unwrap();
+
+            std::env::set_var(DATA_DIR_ENV_VAR, &dir);
+            DataDirGuard { dir, _lock: lock }
+        }
+    }
+
+    impl Drop for DataDirGuard {
+        fn drop(&mut self) {
+            std::env::remove_var(DATA_DIR_ENV_VAR);
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
 
     #[test]
     fn project_name_from_full_path() {
@@ -203,5 +294,47 @@ mod tests {
         assert_eq!(name, "ProjectX");
         assert!(!name.contains("secretuser"));
         assert!(!name.contains("C:\\"));
+    }
+
+    #[test]
+    fn end_to_end_reads_window_and_file_view_state() {
+        let _guard = DataDirGuard::new();
+
+        // Window state: active session and project.
+        let raw = read_window_state().expect("window state should be readable");
+        let state = crate::state::parse_window_state(&raw).expect("window state should parse");
+        assert_eq!(state.session_id.as_deref(), Some("ses_active"));
+        assert_eq!(
+            state.directory.as_deref(),
+            Some("C:\\Users\\HP\\Desktop\\MyProject")
+        );
+
+        // File view: the session's viewed files.
+        let files = read_file_view("ses_active").expect("file view should be readable");
+        assert!(files.contains(&"src/main.rs".to_string()));
+        assert!(files.contains(&"src/app.ts".to_string()));
+    }
+
+    #[test]
+    fn read_file_view_returns_none_for_unknown_session() {
+        let _guard = DataDirGuard::new();
+        assert!(read_file_view("ses_missing").is_none());
+    }
+
+    #[test]
+    fn workspace_state_files_discovers_workspace_files_only() {
+        let _guard = DataDirGuard::new();
+        let files = workspace_state_files();
+        assert!(files.iter().any(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().starts_with(WORKSPACE_STATE_PREFIX))
+                .unwrap_or(false)
+        }));
+        // The window file must not be reported as a workspace file.
+        assert!(!files.iter().any(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().starts_with(WINDOW_STATE_PREFIX))
+                .unwrap_or(false)
+        }));
     }
 }

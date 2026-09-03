@@ -53,7 +53,7 @@ pub struct ActivityTimestamps {
 ///   that show elapsed or remaining time.
 ///
 /// * `application` — Optional application identifier. Plugins should set this
-///   to their application name (e.g. "League of Legends", "FL Studio") so the
+///   to their application name (e.g. "Antigravity", "FL Studio") so the
 ///   generic presence layer can render it without relying on metadata key
 ///   conventions. Defaults to `None`. When `None` and `metadata` contains an
 ///   `"application"` key, the metadata value is used as a
@@ -127,7 +127,7 @@ pub struct Activity {
     /// Optional application identifier.
     ///
     /// Plugins should set this to their application name (e.g.
-    /// "League of Legends", "FL Studio") so the generic presence layer
+    /// "Antigravity", "FL Studio") so the generic presence layer
     /// can render it without relying on metadata key conventions.
     ///
     /// Defaults to `None`. When `None` and `metadata` contains an
@@ -182,10 +182,10 @@ mod tests {
             state: "Playing".to_string(),
             details: None,
             timestamps: None,
-            application: Some("League of Legends".to_string()),
+            application: Some("Antigravity".to_string()),
             metadata: HashMap::new(),
         };
-        assert_eq!(activity.application.as_deref(), Some("League of Legends"));
+        assert_eq!(activity.application.as_deref(), Some("Antigravity"));
 
         let json = serde_json::to_string(&activity).unwrap();
         let back: Activity = serde_json::from_str(&json).unwrap();
@@ -207,7 +207,7 @@ mod tests {
                 start: Some(1000),
                 end: Some(2000),
             }),
-            application: Some("League of Legends".to_string()),
+            application: Some("Antigravity".to_string()),
             metadata: {
                 let mut m = HashMap::new();
                 m.insert("score".to_string(), "9999".to_string());

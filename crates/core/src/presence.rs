@@ -37,7 +37,13 @@
 //!   field and takes precedence over the metadata key.
 //! * `metadata["application"]` → the same, used only as a backward-compatible
 //!   fallback when `activity.application` is `None`.
+//! * `metadata["large_text"]` → [`PresenceAssets::large_text`], used only when
+//!   neither `activity.application` nor `metadata["application"]` is present.
+//!   Lets a plugin set a hover tooltip (e.g. "Python") without making it the
+//!   application identity.
 //! * `metadata["version"]` → [`PresenceAssets::small_text`].
+//! * `metadata["small_text"]` → [`PresenceAssets::small_text`], taking
+//!   precedence over the version fallback.
 //! * `metadata["large_image"]` → [`PresenceAssets::large_image`], overriding
 //!   the derived slug so a plugin can point at a real Discord asset key.
 //! * `metadata["small_image"]` → [`PresenceAssets::small_image`].
@@ -310,12 +316,19 @@ impl From<&Activity> for RichPresence {
     fn from(activity: &Activity) -> Self {
         // The explicit application field is the first-class identity; the
         // metadata key remains as a backward-compatible fallback so plugins
-        // that predate the field keep rendering identically.
+        // that predate the field keep rendering identically. The `large_text`
+        // metadata key is a final fallback so a plugin can set a hover tooltip
+        // (e.g. a file type name) without claiming the application identity.
         let large_text = activity
             .application
             .clone()
-            .or_else(|| activity.metadata.get("application").cloned());
-        let small_text = activity.metadata.get("version").cloned();
+            .or_else(|| activity.metadata.get("application").cloned())
+            .or_else(|| activity.metadata.get("large_text").cloned());
+        let small_text = activity
+            .metadata
+            .get("small_text")
+            .cloned()
+            .or_else(|| activity.metadata.get("version").cloned());
 
         // Explicit asset keys (metadata["large_image"] / ["small_image"])
         // override the derived application slug. Plugins that register real
@@ -657,12 +670,12 @@ mod tests {
     #[test]
     fn conversion_explicit_large_image_overrides_derived_slug() {
         let mut metadata = HashMap::new();
-        metadata.insert("application".to_string(), "League of Legends".to_string());
-        metadata.insert("large_image".to_string(), "league".to_string());
-        metadata.insert("small_image".to_string(), "champion".to_string());
+        metadata.insert("application".to_string(), "Antigravity".to_string());
+        metadata.insert("large_image".to_string(), "custom_antigravity".to_string());
+        metadata.insert("small_image".to_string(), "robot".to_string());
 
         let activity = Activity {
-            state: "In Game".to_string(),
+            state: "Coding".to_string(),
             details: None,
             timestamps: None,
             metadata,
@@ -674,15 +687,15 @@ mod tests {
 
         assert_eq!(
             assets.large_text.as_deref(),
-            Some("League of Legends"),
+            Some("Antigravity"),
             "large text still comes from application"
         );
         assert_eq!(
             assets.large_image.as_deref(),
-            Some("league"),
-            "explicit large_image must override the derived 'leagueoflegends' slug"
+            Some("custom_antigravity"),
+            "explicit large_image must override the derived 'antigravity' slug"
         );
-        assert_eq!(assets.small_image.as_deref(), Some("champion"));
+        assert_eq!(assets.small_image.as_deref(), Some("robot"));
         assert!(assets.small_text.is_none());
     }
 
@@ -715,16 +728,16 @@ mod tests {
             state: "In Game".to_string(),
             details: None,
             timestamps: None,
-            application: Some("League of Legends".to_string()),
+            application: Some("Antigravity".to_string()),
             metadata,
         };
 
         let presence = RichPresence::from(&activity);
         let assets = presence.assets.expect("assets should be present");
-        assert_eq!(assets.large_text.as_deref(), Some("League of Legends"));
+        assert_eq!(assets.large_text.as_deref(), Some("Antigravity"));
         assert_eq!(
             assets.large_image.as_deref(),
-            Some("leagueoflegends"),
+            Some("antigravity"),
             "the derived slug follows the field, not the metadata"
         );
     }
@@ -766,6 +779,73 @@ mod tests {
         let presence = RichPresence::from(&activity);
         assert!(presence.assets.is_none(), "no application -> no assets");
         assert_eq!(presence.state.as_deref(), Some("Idle"));
+    }
+
+    #[test]
+    fn conversion_uses_large_text_metadata_key_without_application() {
+        // A plugin (e.g. OpenCode) that wants the hover tooltip to be the
+        // file type name rather than the application name sets
+        // metadata["large_text"] and leaves `application` unset.
+        let mut metadata = HashMap::new();
+        metadata.insert("large_image".to_string(), "rust".to_string());
+        metadata.insert("large_text".to_string(), "Rust".to_string());
+        metadata.insert("small_image".to_string(), "opencode".to_string());
+        metadata.insert("small_text".to_string(), "OpenCode".to_string());
+
+        let activity = Activity {
+            state: "Editing main.rs".to_string(),
+            details: Some("Project: PresenceHUB".to_string()),
+            timestamps: None,
+            application: None,
+            metadata,
+        };
+
+        let presence = RichPresence::from(&activity);
+        let assets = presence.assets.expect("assets should be present");
+
+        assert_eq!(assets.large_text.as_deref(), Some("Rust"));
+        assert_eq!(assets.large_image.as_deref(), Some("rust"));
+        assert_eq!(assets.small_image.as_deref(), Some("opencode"));
+        assert_eq!(assets.small_text.as_deref(), Some("OpenCode"));
+    }
+
+    #[test]
+    fn conversion_application_takes_precedence_over_large_text_key() {
+        // If a plugin sets both an application identity and a `large_text`
+        // metadata key, the application identity must win.
+        let mut metadata = HashMap::new();
+        metadata.insert("large_text".to_string(), "Rust".to_string());
+
+        let activity = Activity {
+            state: "Editing".to_string(),
+            details: None,
+            timestamps: None,
+            application: Some("OpenCode".to_string()),
+            metadata,
+        };
+
+        let presence = RichPresence::from(&activity);
+        let assets = presence.assets.expect("assets should be present");
+        assert_eq!(assets.large_text.as_deref(), Some("OpenCode"));
+    }
+
+    #[test]
+    fn conversion_small_text_key_takes_precedence_over_version() {
+        let mut metadata = HashMap::new();
+        metadata.insert("version".to_string(), "21".to_string());
+        metadata.insert("small_text".to_string(), "OpenCode".to_string());
+
+        let activity = Activity {
+            state: "Editing".to_string(),
+            details: None,
+            timestamps: None,
+            application: None,
+            metadata,
+        };
+
+        let presence = RichPresence::from(&activity);
+        let assets = presence.assets.expect("assets should be present");
+        assert_eq!(assets.small_text.as_deref(), Some("OpenCode"));
     }
 
     #[test]

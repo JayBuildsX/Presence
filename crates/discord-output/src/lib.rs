@@ -43,7 +43,7 @@
 //!
 //! Consequence: one Discord connection can only ever display one application
 //! name. A plugin cannot make PresenceHub's single connected application
-//! appear as "League of Legends" one moment and "FL Studio" the next.
+//! appear as "Antigravity" one moment and "FL Studio" the next.
 //!
 //! ## Production solution
 //!
@@ -52,8 +52,8 @@
 //! and selecting the matching client ID *before* connecting — reconnecting
 //! when the active plugin changes. That means:
 //!
-//! - one Discord application / client ID per plugin (e.g. "League of
-//!   Legends", "FL Studio"), each with its own application ID;
+//! - one Discord application / client ID per plugin (e.g. "Antigravity",
+//!   "FL Studio"), each with its own application ID;
 //! - the configuration carrying a plugin-specific Discord application ID;
 //! - the output selecting the current client ID and reconnecting when the
 //!   active plugin changes.
@@ -61,7 +61,7 @@
 //! The current architecture uses a single global `discord_app_id`, so this
 //! is **not** implemented here. Do not fake it by moving the application
 //! name into `state`/`details`: Discord would show the app name twice
-//! ("Playing PresenceHub" / "League of Legends • Draft Pick").
+//! ("Playing PresenceHub" / "Antigravity • Dynamic Conversation Tracking").
 
 mod client;
 mod protocol;
@@ -143,7 +143,7 @@ impl DiscordOutput {
 
     /// Returns whether this output is currently connected to Discord.
     pub fn is_connected(&self) -> bool {
-        self.client.as_ref().map_or(false, |c| c.is_connected())
+        self.client.as_ref().is_some_and(|c| c.is_connected())
     }
 
     /// Resolve the Discord application ID for a source.
@@ -197,10 +197,7 @@ impl DiscordOutput {
     /// the Discord protocol payload and delegates to the client. It knows
     /// nothing about plugins or application-specific data.
     pub fn set_presence(&mut self, presence: &RichPresence) -> Result<(), OutputError> {
-        let client = match self.ensure_client() {
-            Ok(c) => c,
-            Err(e) => return Err(e),
-        };
+        let client = self.ensure_client()?;
 
         let activity_data = to_activity_data(presence);
 
@@ -597,11 +594,11 @@ mod tests {
         }
     }
 
-    /// The per-source map used by the switch tests: League → 200,
+    /// The per-source map used by the switch tests: Antigravity → 200,
     /// FL Studio → 300, default 100.
     fn per_source_app_ids() -> HashMap<String, u64> {
         HashMap::from([
-            ("League of Legends".to_string(), 200),
+            ("Antigravity".to_string(), 200),
             ("FL Studio".to_string(), 300),
         ])
     }
@@ -609,7 +606,7 @@ mod tests {
     #[test]
     fn resolve_app_id_uses_source_map_then_default() {
         let output = DiscordOutput::new(100, per_source_app_ids());
-        assert_eq!(output.resolve_app_id("League of Legends"), 200);
+        assert_eq!(output.resolve_app_id("Antigravity"), 200);
         assert_eq!(output.resolve_app_id("FL Studio"), 300);
         assert_eq!(output.resolve_app_id("Unknown Source"), 100);
     }
@@ -619,10 +616,7 @@ mod tests {
         // Backward compatibility at the output level: an empty per-source map
         // resolves every source to the default application ID.
         let output = DiscordOutput::new(1533559059125637311, HashMap::new());
-        assert_eq!(
-            output.resolve_app_id("League of Legends"),
-            1533559059125637311
-        );
+        assert_eq!(output.resolve_app_id("Antigravity"), 1533559059125637311);
         assert_eq!(output.resolve_app_id("FL Studio"), 1533559059125637311);
     }
 
@@ -646,15 +640,15 @@ mod tests {
         let mut output = DiscordOutput::new(100, per_source_app_ids());
         // Discord not running locally → publish fails, but the resolved app id
         // is selected before the connection attempt.
-        let _ = output.publish("League of Legends", &test_activity("InGame"));
+        let _ = output.publish("Antigravity", &test_activity("Coding"));
         assert_eq!(output.current_app_id, Some(200));
     }
 
     // -- Application switching ---------------------------------------------------
 
     #[test]
-    fn publish_switches_app_id_league_to_flstudio() {
-        // League (200) is the current connection. Publishing FL Studio (300)
+    fn publish_switches_app_id_antigravity_to_flstudio() {
+        // Antigravity (200) is the current connection. Publishing FL Studio (300)
         // must drop the old client and select the new application ID.
         let mut output = DiscordOutput {
             client: Some(DiscordClient::new(200)),
@@ -677,7 +671,7 @@ mod tests {
     }
 
     #[test]
-    fn publish_switches_app_id_flstudio_to_league() {
+    fn publish_switches_app_id_flstudio_to_antigravity() {
         // The reverse transition.
         let mut output = DiscordOutput {
             client: Some(DiscordClient::new(300)),
@@ -686,7 +680,7 @@ mod tests {
             current_app_id: Some(300),
         };
 
-        let _ = output.publish("League of Legends", &test_activity("InGame"));
+        let _ = output.publish("Antigravity", &test_activity("Coding"));
 
         assert!(
             output.client.is_none(),
@@ -705,17 +699,17 @@ mod tests {
         // selected application ID (the reconnect gate must not fire).
         let mut output = DiscordOutput::new(100, per_source_app_ids());
 
-        let _ = output.publish("League of Legends", &test_activity("InGame"));
+        let _ = output.publish("Antigravity", &test_activity("Coding"));
         assert_eq!(output.current_app_id, Some(200));
 
-        let _ = output.publish("League of Legends", &test_activity("In Game 2"));
+        let _ = output.publish("Antigravity", &test_activity("Coding 2"));
         assert_eq!(
             output.current_app_id,
             Some(200),
             "same source must not re-select a different application ID"
         );
 
-        let _ = output.publish("League of Legends", &test_activity("In Game 3"));
+        let _ = output.publish("Antigravity", &test_activity("Coding 3"));
         assert_eq!(output.current_app_id, Some(200));
     }
 
@@ -750,12 +744,12 @@ mod tests {
 
     #[test]
     fn publish_switch_while_disconnected_uses_new_sources_app_id() {
-        // No client exists (disconnected). Publishing League selects 200;
+        // No client exists (disconnected). Publishing Antigravity selects 200;
         // switching source still disconnected selects 300 without any prior
         // connection to tear down.
         let mut output = DiscordOutput::new(100, per_source_app_ids());
 
-        let _ = output.publish("League of Legends", &test_activity("InGame"));
+        let _ = output.publish("Antigravity", &test_activity("Coding"));
         assert_eq!(output.current_app_id, Some(200));
         assert!(output.client.is_none());
 
@@ -776,7 +770,7 @@ mod tests {
             current_app_id: Some(200),
         };
 
-        let result = output.publish("League of Legends", &test_activity("InGame"));
+        let result = output.publish("Antigravity", &test_activity("Coding"));
         assert!(result.is_err(), "publish without a live Discord must fail");
         assert!(output.client.is_none(), "failed publish drops the client");
         assert_eq!(
@@ -786,7 +780,7 @@ mod tests {
         );
 
         // The next publish reconnects using the retained application ID.
-        let _ = output.publish("League of Legends", &test_activity("In Game 2"));
+        let _ = output.publish("Antigravity", &test_activity("Coding 2"));
         assert_eq!(output.current_app_id, Some(200));
     }
 }

@@ -6,7 +6,7 @@ members = [
     "crates/discord-output",
     "apps/desktop/src-tauri",
     "plugins/flstudio",
-    "plugins/league",
+    "plugins/antigravity",
     "plugins/opencode",
 ]
 

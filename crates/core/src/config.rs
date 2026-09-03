@@ -67,8 +67,8 @@ impl Default for RuntimeConfig {
 pub struct PluginConfig {
     /// Whether the FL Studio plugin is enabled.
     pub flstudio: bool,
-    /// Whether the League of Legends plugin is enabled.
-    pub league: bool,
+    /// Whether the Antigravity plugin is enabled.
+    pub antigravity: bool,
     /// Whether the OpenCode plugin is enabled.
     pub opencode: bool,
 }
@@ -77,7 +77,7 @@ impl Default for PluginConfig {
     fn default() -> Self {
         Self {
             flstudio: true,
-            league: true,
+            antigravity: true,
             opencode: true,
         }
     }
@@ -96,7 +96,7 @@ pub struct OutputConfig {
     /// [`Self::discord_apps`]) disables the Discord output.
     pub discord_app_id: u64,
     /// Optional per-source Discord application IDs, keyed by the engine
-    /// source string (the plugin's metadata name, e.g. "League of Legends").
+    /// source string (the plugin's metadata name, e.g. "Antigravity").
     /// Sources without an entry fall back to [`Self::discord_app_id`].
     #[serde(default)]
     pub discord_apps: HashMap<String, u64>,
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(config.log_level, "info");
         assert_eq!(config.runtime.poll_interval_ms, 1000);
         assert!(config.plugins.flstudio);
-        assert!(config.plugins.league);
+        assert!(config.plugins.antigravity);
         assert!(config.outputs.console);
         assert!(!config.outputs.discord);
         assert_eq!(config.outputs.discord_app_id, 0);
@@ -397,14 +397,11 @@ mod tests {
             discord_app_id = 1533559059125637311
 
             [outputs.discord_apps]
-            "League of Legends" = 200
+            "Antigravity" = 200
             "FL Studio" = 300
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(
-            config.outputs.discord_apps.get("League of Legends"),
-            Some(&200)
-        );
+        assert_eq!(config.outputs.discord_apps.get("Antigravity"), Some(&200));
         assert_eq!(config.outputs.discord_apps.get("FL Studio"), Some(&300));
         assert_eq!(config.outputs.discord_apps.len(), 2);
         // The default is retained alongside the per-source overrides.
@@ -506,7 +503,7 @@ mod tests {
         // The minimum must be nonzero and well below the default, so it
         // actually prevents busy-looping without forcing an unresponsive
         // polling cadence.
-        assert!(RuntimeConfig::MIN_POLL_INTERVAL_MS > 0);
+        const { assert!(RuntimeConfig::MIN_POLL_INTERVAL_MS > 0) };
         assert!(RuntimeConfig::MIN_POLL_INTERVAL_MS < RuntimeConfig::default().poll_interval_ms);
     }
 
@@ -535,7 +532,7 @@ mod tests {
             },
             plugins: PluginConfig {
                 flstudio: false,
-                league: false,
+                antigravity: false,
                 opencode: false,
             },
             outputs: OutputConfig {
@@ -552,6 +549,7 @@ mod tests {
         assert_eq!(deserialized.log_level, "trace");
         assert_eq!(deserialized.runtime.poll_interval_ms, 750);
         assert!(!deserialized.plugins.flstudio);
+        assert!(!deserialized.plugins.antigravity);
         assert!(!deserialized.outputs.console);
         assert!(deserialized.outputs.discord);
         assert_eq!(deserialized.outputs.discord_app_id, 424242);
@@ -607,9 +605,9 @@ mod tests {
     }
 
     #[test]
-    fn config_league_defaults_enabled() {
+    fn config_antigravity_defaults_enabled() {
         let config = Config::default();
-        assert!(config.plugins.league);
+        assert!(config.plugins.antigravity);
     }
 
     #[test]
@@ -623,13 +621,13 @@ mod tests {
         let toml_str = r#"
             [plugins]
             flstudio = true
-            league = true
+            antigravity = true
             opencode = false
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(!config.plugins.opencode);
         assert!(config.plugins.flstudio);
-        assert!(config.plugins.league);
+        assert!(config.plugins.antigravity);
     }
 
     #[test]
@@ -646,20 +644,20 @@ mod tests {
     }
 
     #[test]
-    fn config_league_deserializes_explicitly() {
+    fn config_antigravity_deserializes_explicitly() {
         let toml_str = r#"
             [plugins]
             flstudio = true
-            league = false
+            antigravity = false
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert!(!config.plugins.league);
+        assert!(!config.plugins.antigravity);
         assert!(config.plugins.flstudio);
     }
 
     #[test]
-    fn config_league_missing_in_toml_uses_default() {
-        // An existing config file without the `league` key keeps the default
+    fn config_antigravity_missing_in_toml_uses_default() {
+        // An existing config file without the `antigravity` key keeps the default
         // (enabled), so upgrading the schema does not silently disable the
         // new plugin.
         let toml_str = r#"
@@ -667,7 +665,7 @@ mod tests {
             flstudio = true
         "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert!(config.plugins.league);
+        assert!(config.plugins.antigravity);
     }
 
     // -- Ownership policy -----------------------------------------------------

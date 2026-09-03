@@ -62,7 +62,7 @@ pub fn run() {
     info!(
         poll_interval_ms = config.runtime.poll_interval_ms,
         flstudio = config.plugins.flstudio,
-        league = config.plugins.league,
+        antigravity = config.plugins.antigravity,
         opencode = config.plugins.opencode,
         console = config.outputs.console,
         discord = config.outputs.discord,

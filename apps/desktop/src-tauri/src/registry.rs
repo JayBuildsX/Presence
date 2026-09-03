@@ -14,13 +14,13 @@
 //!
 //! The runtime does not change.
 
+use presencehub_antigravity::AntigravityPlugin;
 use presencehub_core::{
     output::{ConsoleOutput, Output},
     Config,
 };
 use presencehub_discord_output::DiscordOutput;
 use presencehub_flstudio::FlStudioPlugin;
-use presencehub_league::LeaguePlugin;
 use presencehub_opencode::OpenCodePlugin;
 use presencehub_plugin_host::Plugin;
 
@@ -57,8 +57,8 @@ impl PluginRegistry {
             plugins.push(Box::new(FlStudioPlugin::new()));
         }
 
-        if config.plugins.league {
-            plugins.push(Box::new(LeaguePlugin::new()));
+        if config.plugins.antigravity {
+            plugins.push(Box::new(AntigravityPlugin::new()));
         }
 
         if config.plugins.opencode {
@@ -136,12 +136,12 @@ mod tests {
     // -- PluginRegistry tests --------------------------------------------------
 
     #[test]
-    fn plugin_registry_creates_flstudio_league_and_opencode_when_enabled() {
-        let config = Config::default(); // flstudio = true, league = true, opencode = true by default
+    fn plugin_registry_creates_flstudio_antigravity_and_opencode_when_enabled() {
+        let config = Config::default(); // flstudio = true, antigravity = true, opencode = true by default
         let plugins = PluginRegistry::create_enabled_plugins(&config);
         assert_eq!(plugins.len(), 3);
         assert_eq!(plugins[0].metadata().name, "FL Studio");
-        assert_eq!(plugins[1].metadata().name, "League of Legends");
+        assert_eq!(plugins[1].metadata().name, "Antigravity");
         assert_eq!(plugins[2].metadata().name, "OpenCode");
     }
 
@@ -150,7 +150,7 @@ mod tests {
         let config = Config {
             plugins: presencehub_core::PluginConfig {
                 flstudio: false,
-                league: false,
+                antigravity: false,
                 opencode: false,
             },
             ..Config::default()
@@ -167,19 +167,19 @@ mod tests {
         assert_eq!(plugins.len(), 3);
         assert_eq!(plugins[0].metadata().name, "FL Studio");
         assert_eq!(plugins[0].metadata().version, "0.1.0");
-        assert_eq!(plugins[1].metadata().name, "League of Legends");
+        assert_eq!(plugins[1].metadata().name, "Antigravity");
         assert_eq!(plugins[1].metadata().version, "0.1.0");
         assert_eq!(plugins[2].metadata().name, "OpenCode");
         assert_eq!(plugins[2].metadata().version, "0.1.0");
     }
 
     #[test]
-    fn plugin_registry_league_respects_config() {
-        // League disabled but FL Studio enabled.
+    fn plugin_registry_antigravity_respects_config() {
+        // Antigravity disabled but FL Studio enabled.
         let config = Config {
             plugins: presencehub_core::PluginConfig {
                 flstudio: true,
-                league: false,
+                antigravity: false,
                 opencode: false,
             },
             ..Config::default()
@@ -188,18 +188,18 @@ mod tests {
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0].metadata().name, "FL Studio");
 
-        // Only League enabled.
+        // Only Antigravity enabled.
         let config = Config {
             plugins: presencehub_core::PluginConfig {
                 flstudio: false,
-                league: true,
+                antigravity: true,
                 opencode: false,
             },
             ..Config::default()
         };
         let plugins = PluginRegistry::create_enabled_plugins(&config);
         assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].metadata().name, "League of Legends");
+        assert_eq!(plugins[0].metadata().name, "Antigravity");
     }
 
     #[test]
@@ -208,7 +208,7 @@ mod tests {
         let config = Config {
             plugins: presencehub_core::PluginConfig {
                 flstudio: false,
-                league: false,
+                antigravity: false,
                 opencode: true,
             },
             ..Config::default()
@@ -299,7 +299,7 @@ mod tests {
                 discord: true,
                 discord_app_id: 0,
                 discord_apps: std::collections::HashMap::from([(
-                    "League of Legends".to_string(),
+                    "Antigravity".to_string(),
                     123456789,
                 )]),
             },

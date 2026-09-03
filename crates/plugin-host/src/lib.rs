@@ -72,7 +72,7 @@ impl PluginMetadata {
 /// empty vector simply never matches.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WindowIdentity {
-    /// Process base-name patterns (e.g. `"fl64.exe"`, `"League of Legends.exe"`).
+    /// Process base-name patterns (e.g. `"fl64.exe"`, `"antigravity.exe"`).
     pub process_names: Vec<String>,
     /// Window class-name patterns (e.g. `"TFruityLoopsMainForm"`).
     pub window_classes: Vec<String>,

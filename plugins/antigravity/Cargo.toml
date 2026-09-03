@@ -1,0 +1,25 @@
+[package]
+name = "presencehub-antigravity"
+version = "0.1.0"
+edition = "2021"
+description = "Antigravity Discord Rich Presence plugin for PresenceHub"
+
+[dependencies]
+presencehub-core = { path = "../../crates/core" }
+presencehub-plugin-host = { path = "../../crates/plugin-host" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = [
+    "winuser",
+    "errhandlingapi",
+    "processthreadsapi",
+    "handleapi",
+    "winnt",
+    "winbase",
+    "minwindef",
+    "tlhelp32"
+] }

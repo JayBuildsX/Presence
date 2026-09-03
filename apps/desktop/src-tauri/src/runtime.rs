@@ -366,8 +366,7 @@ impl Runtime {
         // 2. Clear the presence engine FIRST so every output (notably
         //    Discord) receives an explicit activity-clear before any
         //    potentially slow plugin shutdown runs or the process exits.
-        //    Plugin shutdown can block (the League plugin joins a worker
-        //    thread for up to ~2s), and Windows console-close force-
+        //    Plugin shutdown can block, and Windows console-close force-
         //    terminates the process after a short grace period — so the
         //    Discord clear must happen as early as possible in shutdown.
         //    engine.clear() is best-effort and never fails, so shutdown
@@ -532,7 +531,7 @@ mod tests {
         let config = Config {
             plugins: presencehub_core::PluginConfig {
                 flstudio: false,
-                league: false,
+                antigravity: false,
                 opencode: false,
             },
             outputs: presencehub_core::OutputConfig {
@@ -592,7 +591,7 @@ mod tests {
 
         let mut runtime = Runtime::new();
         runtime.start().unwrap();
-        // FL Studio, League, and OpenCode plugins should be registered via PluginRegistry
+        // FL Studio, Antigravity, and OpenCode plugins should be registered via PluginRegistry
         assert_eq!(runtime.host().plugins().len(), 3);
         runtime.shutdown();
     }
@@ -886,7 +885,7 @@ mod tests {
         assert!(tracker.polled_err("FL Studio", "window not found"));
         assert!(!tracker.polled_err("FL Studio", "window not found"));
         assert!(
-            tracker.polled_err("League of Legends", "client not running"),
+            tracker.polled_err("Antigravity", "client not running"),
             "one plugin's repeated failure must not suppress another plugin's warning"
         );
         assert!(
@@ -950,9 +949,9 @@ mod tests {
                 "FL Studio window not found".to_string(),
             ))
         };
-        let league_err = || {
+        let antigravity_err = || {
             Err(PluginError::PollFailed(
-                "League client not running".to_string(),
+                "Antigravity client not running".to_string(),
             ))
         };
 
@@ -962,7 +961,7 @@ mod tests {
             runtime.handle_poll_result(&mut tracker, "FL Studio".to_string(), fl_err());
             runtime.handle_poll_result(&mut tracker, "FL Studio".to_string(), fl_err());
             // An unrelated plugin fails in the meantime; it must still warn.
-            runtime.handle_poll_result(&mut tracker, "League of Legends".to_string(), league_err());
+            runtime.handle_poll_result(&mut tracker, "Antigravity".to_string(), antigravity_err());
             // FL Studio remains down; still suppressed.
             runtime.handle_poll_result(&mut tracker, "FL Studio".to_string(), fl_err());
         });
@@ -973,28 +972,28 @@ mod tests {
             .count();
         assert_eq!(
             warnings, 2,
-            "FL Studio suppressed, but the League failure must still be logged; logs:\n{}",
+            "FL Studio suppressed, but the Antigravity failure must still be logged; logs:\n{}",
             logs
         );
     }
 
     #[test]
-    fn runtime_league_repeated_failure_logs_exactly_one_warning() {
-        // The reported scenario: League of Legends is unavailable and every
+    fn runtime_antigravity_repeated_failure_logs_exactly_one_warning() {
+        // The reported scenario: Antigravity is unavailable and every
         // polling cycle produces the identical "client not running" error.
         // The runtime must warn once and then stay silent while the condition
         // persists.
         let mut runtime = Runtime::new();
         let err = || {
             Err(PluginError::PollFailed(
-                "League of Legends client not running".to_string(),
+                "Antigravity client not running".to_string(),
             ))
         };
 
         let logs = capture_logs(|| {
             let mut tracker = PollErrorTracker::default();
             for _ in 0..20 {
-                runtime.handle_poll_result(&mut tracker, "League of Legends".to_string(), err());
+                runtime.handle_poll_result(&mut tracker, "Antigravity".to_string(), err());
             }
         });
 
@@ -1008,39 +1007,39 @@ mod tests {
             .count();
         assert_eq!(
             warnings, 1,
-            "repeated identical League failures must yield exactly ONE warning; logs:\n{}",
+            "repeated identical Antigravity failures must yield exactly ONE warning; logs:\n{}",
             logs
         );
         assert_eq!(
             recoveries, 0,
-            "no recovery expected while League stays down; logs:\n{}",
+            "no recovery expected while Antigravity stays down; logs:\n{}",
             logs
         );
     }
 
     #[test]
-    fn runtime_league_recovery_sequence() {
-        // One League warning -> silence -> one recovery -> silence -> one
-        // warning when League comes back and then fails again.
+    fn runtime_antigravity_recovery_sequence() {
+        // One Antigravity warning -> silence -> one recovery -> silence -> one
+        // warning when Antigravity comes back and then fails again.
         let mut runtime = Runtime::new();
         let err = || {
             Err(PluginError::PollFailed(
-                "League of Legends client not running".to_string(),
+                "Antigravity client not running".to_string(),
             ))
         };
 
         let logs = capture_logs(|| {
             let mut tracker = PollErrorTracker::default();
             // unavailable (warn), unavailable (silent), unavailable (silent)
-            runtime.handle_poll_result(&mut tracker, "League of Legends".to_string(), err());
-            runtime.handle_poll_result(&mut tracker, "League of Legends".to_string(), err());
-            runtime.handle_poll_result(&mut tracker, "League of Legends".to_string(), err());
+            runtime.handle_poll_result(&mut tracker, "Antigravity".to_string(), err());
+            runtime.handle_poll_result(&mut tracker, "Antigravity".to_string(), err());
+            runtime.handle_poll_result(&mut tracker, "Antigravity".to_string(), err());
             // available (recovery once), available (silent)
-            runtime.handle_poll_result(&mut tracker, "League of Legends".to_string(), Ok(None));
-            runtime.handle_poll_result(&mut tracker, "League of Legends".to_string(), Ok(None));
+            runtime.handle_poll_result(&mut tracker, "Antigravity".to_string(), Ok(None));
+            runtime.handle_poll_result(&mut tracker, "Antigravity".to_string(), Ok(None));
             // unavailable again (warn), unavailable (silent)
-            runtime.handle_poll_result(&mut tracker, "League of Legends".to_string(), err());
-            runtime.handle_poll_result(&mut tracker, "League of Legends".to_string(), err());
+            runtime.handle_poll_result(&mut tracker, "Antigravity".to_string(), err());
+            runtime.handle_poll_result(&mut tracker, "Antigravity".to_string(), err());
         });
 
         let mut events = Vec::new();
@@ -1060,8 +1059,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_league_fl_plugin_isolation() {
-        // Both FL Studio and League of Legends are unavailable, alternating
+    fn runtime_antigravity_fl_plugin_isolation() {
+        // Both FL Studio and Antigravity are unavailable, alternating
         // every cycle. Each plugin's first failure must warn independently;
         // neither suppresses the other's warning.
         let mut runtime = Runtime::new();
@@ -1070,18 +1069,18 @@ mod tests {
                 "FL Studio window not found".to_string(),
             ))
         };
-        let league_err = || {
+        let antigravity_err = || {
             Err(PluginError::PollFailed(
-                "League of Legends client not running".to_string(),
+                "Antigravity client not running".to_string(),
             ))
         };
 
         let logs = capture_logs(|| {
             let mut tracker = PollErrorTracker::default();
             runtime.handle_poll_result(&mut tracker, "FL Studio".to_string(), fl_err());
-            runtime.handle_poll_result(&mut tracker, "League of Legends".to_string(), league_err());
+            runtime.handle_poll_result(&mut tracker, "Antigravity".to_string(), antigravity_err());
             runtime.handle_poll_result(&mut tracker, "FL Studio".to_string(), fl_err());
-            runtime.handle_poll_result(&mut tracker, "League of Legends".to_string(), league_err());
+            runtime.handle_poll_result(&mut tracker, "Antigravity".to_string(), antigravity_err());
         });
 
         let warnings = logs
@@ -1095,8 +1094,8 @@ mod tests {
         );
     }
 
-    /// A plugin that always fails its poll, like FL Studio or League of
-    /// Legends when the game is not running. Emits the identical error on
+    /// A plugin that always fails its poll, like FL Studio or Antigravity
+    /// when the app is not running. Emits the identical error on
     /// every poll.
     struct AlwaysFailingPlugin {
         metadata: presencehub_plugin_host::PluginMetadata,
@@ -1197,7 +1196,7 @@ mod tests {
             },
             plugins: presencehub_core::PluginConfig {
                 flstudio: false,
-                league: false,
+                antigravity: false,
                 opencode: false,
             },
             ..Config::default()
@@ -1240,13 +1239,13 @@ mod tests {
         );
     }
 
-    /// Drives the real [`Runtime::run`] polling loop with a League-named
+    /// Drives the real [`Runtime::run`] polling loop with an Antigravity-named
     /// plugin that fails identically on every cycle and asserts that the
     /// runtime emits exactly one warning.
     #[test]
-    fn runtime_poll_loop_logs_exactly_one_league_warning() {
-        // The reported League scenario driven through the real polling loop:
-        // a League plugin returning the identical "client not running" error
+    fn runtime_poll_loop_logs_exactly_one_antigravity_warning() {
+        // The reported scenario driven through the real polling loop:
+        // an Antigravity plugin returning the identical "client not running" error
         // every cycle must yield exactly ONE warning, not one per cycle.
         let config = Config {
             runtime: presencehub_core::RuntimeConfig {
@@ -1254,7 +1253,7 @@ mod tests {
             },
             plugins: presencehub_core::PluginConfig {
                 flstudio: false,
-                league: false,
+                antigravity: false,
                 opencode: false,
             },
             ..Config::default()
@@ -1263,8 +1262,8 @@ mod tests {
         runtime
             .host
             .register(Box::new(AlwaysFailingPlugin::with_error(
-                "League of Legends",
-                "League of Legends client not running",
+                "Antigravity",
+                "Antigravity client not running",
             )));
         runtime.running.store(true, Ordering::SeqCst);
 
@@ -1288,12 +1287,12 @@ mod tests {
             .count();
         assert_eq!(
             warnings, 1,
-            "identical League failures across many polling cycles must yield exactly ONE warning; logs:\n{}",
+            "identical Antigravity failures across many polling cycles must yield exactly ONE warning; logs:\n{}",
             logs
         );
         assert_eq!(
             recoveries, 0,
-            "no recovery expected while League stays down; logs:\n{}",
+            "no recovery expected while Antigravity stays down; logs:\n{}",
             logs
         );
     }
@@ -1309,7 +1308,7 @@ mod tests {
             },
             plugins: presencehub_core::PluginConfig {
                 flstudio: false,
-                league: false,
+                antigravity: false,
                 opencode: false,
             },
             ..Config::default()

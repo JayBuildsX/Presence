@@ -15,12 +15,35 @@
 //!    (`%APPDATA%\ai.opencode.desktop`). The window state carries the
 //!    active session's workspace directory and session title.
 //!
-//! 3. **Activity** — The plugin builds a conservative Activity:
-//!    - `state`: `"Coding"` when a project is open, `"Idle"` otherwise
+//! 3. **File** — OpenCode does not persist an explicit "active file" flag.
+//!    The plugin approximates the current file using the per-session
+//!    file-view state in `opencode.workspace.<project>.dat`: a file that
+//!    first appears in the active session's file-view since the last poll
+//!    is treated as the file the user most recently opened/selected.
+//!
+//! 4. **Activity** — The plugin builds a conservative Activity:
+//!    - `state`: `"Editing <file.ext>"` when a file is being viewed,
+//!      `"Coding"` when only a project is open, `"Idle"` otherwise
 //!    - `details`: `"Project: <name>"` using only the last path component
 //!      of the workspace directory (never the full filesystem path)
-//!    - `application`: `Some("OpenCode")`
-//!    - `metadata`: may include `"project"` (human-readable name)
+//!    - `metadata`:
+//!      - `large_image`/`large_text`: the file type's icon URL and display
+//!        name (e.g. the Rust icon / `"Rust"`), shown as the large image and
+//!        its hover text. Icons are resolved VS-Code-style by
+//!        [`FileIconResolver`]: exact file name first (`Dockerfile`,
+//!        `package.json`, ...), then extension, then no icon. The URL is
+//!        rehosted by Discord's media proxy, so no Discord asset upload is
+//!        required.
+//!      - `small_image`/`small_text`: the OpenCode logo URL / `"OpenCode"`
+//!      - `project`: human-readable project name
+//!    - `application`: deliberately `None` so the application identity never
+//!      overrides the file type's label in the large-image hover
+//!
+//! The Discord application (ID 1538988824623972492) requires no uploaded
+//! assets: both images are external URLs fetched by Discord's media proxy.
+//! All icon URLs are pinned to immutable releases (the Material Icon Theme
+//! npm package at a fixed version and the OpenCode logo at a fixed commit);
+//! see [`file_icons`] and [`OPENCODE_LOGO_URL`].
 //!
 //! # Privacy
 //!
@@ -35,15 +58,24 @@ use presencehub_core::activity::Activity;
 use presencehub_plugin_host::{Plugin, PluginError, PluginMetadata, WindowIdentity};
 
 mod detection;
+mod file_icons;
 mod state;
 
 pub use detection::{
-    data_dir, find_window_state_file, opencode_running, project_name_from_path, read_window_state,
+    data_dir, find_window_state_file, opencode_running, project_name_from_path, read_file_view,
+    read_window_state, workspace_state_files,
 };
-pub use state::{parse_window_state, OpenCodeState};
+pub use file_icons::{file_name_from_path, FileIconResolver, IconResolution};
+pub use state::{parse_file_view, parse_window_state, OpenCodeState};
 
 /// The canonical application name for this plugin.
 pub const APPLICATION_NAME: &str = "OpenCode";
+
+/// External URL for the OpenCode logo (a transparent 600x600 PNG in the
+/// OpenCode repo, pinned to an immutable commit — never the moving `dev`
+/// branch). Discord's media proxy fetches and caches it server-side, so no
+/// asset needs to be uploaded to the Discord application.
+pub const OPENCODE_LOGO_URL: &str = "https://raw.githubusercontent.com/anomalyco/opencode/65c35977bd564e23c0e9cf124b3e3e3b9308e9e8/packages/console/app/src/asset/brand/opencode-logo-light-square.png";
 
 /// The OpenCode plugin.
 ///
@@ -61,6 +93,12 @@ pub struct OpenCodePlugin {
     metadata: PluginMetadata,
     /// The last emitted activity, used for change detection.
     last_activity: Option<Activity>,
+    /// The session the file-view heuristic is tracking, if any.
+    active_session: Option<String>,
+    /// The files seen so far in the active session (insertion = discovery).
+    viewed_files: Vec<String>,
+    /// The current file the user is working on, per the file-view heuristic.
+    current_file: Option<String>,
 }
 
 impl OpenCodePlugin {
@@ -69,19 +107,55 @@ impl OpenCodePlugin {
         Self {
             metadata: PluginMetadata::new(APPLICATION_NAME, "0.1.0"),
             last_activity: None,
+            active_session: None,
+            viewed_files: Vec::new(),
+            current_file: None,
         }
     }
 
     /// Handle the OpenCode application being absent.
     ///
     /// Forgets the previously emitted activity so the next identical
-    /// activity is published again when the application reopens. Returns
+    /// activity is published again when the application reopens, and resets
+    /// the file-view heuristic so a fresh session starts clean. Returns
     /// the poll error the runtime uses to end the session.
     fn application_not_found(&mut self) -> Result<Option<Activity>, PluginError> {
         self.last_activity = None;
+        self.active_session = None;
+        self.viewed_files.clear();
+        self.current_file = None;
         Err(PluginError::PollFailed(
             "OpenCode is not running".to_string(),
         ))
+    }
+
+    /// Track the currently active file using the file-view heuristic.
+    ///
+    /// OpenCode does not persist an explicit "active file" flag. The closest
+    /// signal is the per-session file-view state: the set of files the user
+    /// has viewed in a session. A file that appears for the first time since
+    /// the last poll is treated as the file the user has most recently
+    /// opened/selected. When the active session changes, tracking restarts.
+    fn track_active_file(&mut self, state: &OpenCodeState) {
+        let Some(session_id) = state.session_id.as_deref() else {
+            return;
+        };
+
+        // Reset per-session tracking when the active session changes.
+        if self.active_session.as_deref() != Some(session_id) {
+            self.active_session = Some(session_id.to_string());
+            self.viewed_files.clear();
+            self.current_file = None;
+        }
+
+        // A transient read failure must not clear the current file.
+        let Some(files) = detection::read_file_view(session_id) else {
+            return;
+        };
+
+        if let Some(new_file) = advance_file_tracking(&mut self.viewed_files, &files) {
+            self.current_file = Some(new_file);
+        }
     }
 
     /// Observe a snapshot of OpenCode state and apply change detection.
@@ -90,8 +164,12 @@ impl OpenCodePlugin {
     /// only when it differs from the last emitted activity. Split out of
     /// [`Plugin::poll`] so the deduplication state machine can be tested
     /// without a running OpenCode instance.
-    fn observe_state(&mut self, state: &OpenCodeState) -> Result<Option<Activity>, PluginError> {
-        let activity = build_activity(state);
+    fn observe_state(
+        &mut self,
+        state: &OpenCodeState,
+        file: Option<&str>,
+    ) -> Result<Option<Activity>, PluginError> {
+        let activity = build_activity(state, file);
 
         // Only emit if the activity changed.
         if self.last_activity.as_ref() != Some(&activity) {
@@ -142,7 +220,10 @@ impl Plugin for OpenCodePlugin {
             .and_then(|content| state::parse_window_state(&content))
             .unwrap_or_default();
 
-        self.observe_state(&state)
+        self.track_active_file(&state);
+
+        let current_file = self.current_file.clone();
+        self.observe_state(&state, current_file.as_deref())
     }
 
     fn shutdown(&mut self) -> Result<(), PluginError> {
@@ -150,8 +231,37 @@ impl Plugin for OpenCodePlugin {
     }
 }
 
-/// Build a canonical Activity from parsed OpenCode state.
-fn build_activity(state: &OpenCodeState) -> Activity {
+/// Advance the file-view heuristic over a poll.
+///
+/// Appends any newly discovered viewed files to `viewed_files` and returns
+/// the most recently discovered file, which becomes the current file.
+/// Returns `None` when no new file appeared since the last poll. Between
+/// polls the user normally opens files one at a time, so the returned file
+/// is exact in the common case.
+fn advance_file_tracking(viewed_files: &mut Vec<String>, files: &[String]) -> Option<String> {
+    let mut new_files: Vec<String> = files
+        .iter()
+        .filter(|path| !viewed_files.contains(path))
+        .cloned()
+        .collect();
+
+    if new_files.is_empty() {
+        return None;
+    }
+
+    new_files.sort();
+    viewed_files.extend(new_files.iter().cloned());
+    new_files.last().cloned()
+}
+
+/// Build a canonical Activity from parsed OpenCode state and the current
+/// file (if any).
+///
+/// When the user is viewing a file, the primary line is the file name with
+/// its extension ("Editing main.rs"), the file type's icon and label drive
+/// the large image/hover, and the OpenCode logo rides along as the small
+/// image. The project name never exposes a full filesystem path.
+fn build_activity(state: &OpenCodeState, file: Option<&str>) -> Activity {
     // Extract a safe, human-readable project name from the workspace
     // directory. Only the last path component is used; full paths are never
     // exposed.
@@ -160,13 +270,45 @@ fn build_activity(state: &OpenCodeState) -> Activity {
         .as_deref()
         .and_then(detection::project_name_from_path);
 
-    let (activity_state, details) = match &project_name {
-        Some(name) => ("Coding".to_string(), Some(format!("Project: {}", name))),
-        None => ("Idle".to_string(), None),
+    let file_name = file.and_then(file_icons::file_name_from_path);
+    let resolution = file_name
+        .as_deref()
+        .map(|name| FILE_ICON_RESOLVER.resolve(name));
+
+    let (activity_state, details) = match &file_name {
+        Some(name) => (
+            format!("Editing {}", name),
+            Some(format!(
+                "Project: {}",
+                project_name.as_deref().unwrap_or("Unknown")
+            )),
+        ),
+        None => match &project_name {
+            Some(name) => ("Coding".to_string(), Some(format!("Project: {}", name))),
+            None => ("Idle".to_string(), None),
+        },
     };
 
     let mut metadata = std::collections::HashMap::new();
-    metadata.insert("application".to_string(), APPLICATION_NAME.to_string());
+
+    // Large image = the file type's icon (an external URL Discord's media
+    // proxy rehosts), hover = the file type name. The metadata map is built
+    // from scratch on every poll, so a file whose icon cannot be resolved
+    // yields an activity *without* `large_image`/`large_text`: the previous
+    // file's icon is never carried over (no stale icons).
+    if let Some(res) = resolution.as_ref() {
+        if let (Some(image), Some(label)) = (res.image_url.as_deref(), res.label.as_deref()) {
+            metadata.insert("large_image".to_string(), image.to_string());
+            metadata.insert("large_text".to_string(), label.to_string());
+        }
+    }
+
+    // Small image = the OpenCode logo (also an external URL). `application`
+    // is deliberately left None so the application identity does not
+    // override the file type's label in the large-image hover.
+    metadata.insert("small_image".to_string(), OPENCODE_LOGO_URL.to_string());
+    metadata.insert("small_text".to_string(), APPLICATION_NAME.to_string());
+
     if let Some(name) = &project_name {
         metadata.insert("project".to_string(), name.clone());
     }
@@ -175,10 +317,13 @@ fn build_activity(state: &OpenCodeState) -> Activity {
         state: activity_state,
         details,
         timestamps: None,
-        application: Some(APPLICATION_NAME.to_string()),
+        application: None,
         metadata,
     }
 }
+
+/// The resolver used for every poll. Stateless and const-constructible.
+const FILE_ICON_RESOLVER: FileIconResolver = FileIconResolver::new();
 
 #[cfg(test)]
 mod tests {
@@ -193,9 +338,21 @@ mod tests {
 
     #[test]
     fn application_identity_is_opencode() {
+        // The OpenCode identity rides in the small-image assets. The
+        // `application` field must stay None so the application identity
+        // never overrides the file type's language name in the large-image
+        // hover text.
         let state = open_with_state();
-        let activity = build_activity(&state);
-        assert_eq!(activity.application.as_deref(), Some("OpenCode"));
+        let activity = build_activity(&state, None);
+        assert_eq!(activity.application, None);
+        assert_eq!(
+            activity.metadata.get("small_image"),
+            Some(&OPENCODE_LOGO_URL.to_string())
+        );
+        assert_eq!(
+            activity.metadata.get("small_text"),
+            Some(&"OpenCode".to_string())
+        );
     }
 
     #[test]
@@ -208,7 +365,7 @@ mod tests {
     #[test]
     fn activity_with_project() {
         let state = open_with_state();
-        let activity = build_activity(&state);
+        let activity = build_activity(&state, None);
         assert_eq!(activity.state, "Coding");
         assert_eq!(activity.details, Some("Project: MyProject".to_string()));
         assert_eq!(
@@ -220,16 +377,127 @@ mod tests {
     #[test]
     fn activity_without_project() {
         let state = OpenCodeState::default();
-        let activity = build_activity(&state);
+        let activity = build_activity(&state, None);
         assert_eq!(activity.state, "Idle");
         assert!(activity.details.is_none());
         assert!(!activity.metadata.contains_key("project"));
     }
 
     #[test]
+    fn activity_with_file_shows_name_extension_and_language() {
+        // The primary line is "Editing <file.ext>"; the large image uses the
+        // language's logo URL and the hover shows the full language name.
+        let state = open_with_state();
+        let activity = build_activity(&state, Some("crates/core/src/main.rs"));
+        assert_eq!(activity.state, "Editing main.rs");
+        assert_eq!(activity.details, Some("Project: MyProject".to_string()));
+        let large_image = activity.metadata.get("large_image").unwrap();
+        assert!(
+            large_image.contains("rust"),
+            "large image should carry the Rust logo URL, got {large_image}"
+        );
+        assert_eq!(
+            activity.metadata.get("large_text"),
+            Some(&"Rust".to_string())
+        );
+        assert_eq!(
+            activity.metadata.get("small_image"),
+            Some(&OPENCODE_LOGO_URL.to_string())
+        );
+        assert_eq!(
+            activity.metadata.get("small_text"),
+            Some(&"OpenCode".to_string())
+        );
+    }
+
+    #[test]
+    fn activity_with_unknown_file_type_shows_name_without_icon() {
+        // An unrecognized extension resolves to no icon, and the activity
+        // must not carry the previous file's icon (never stale).
+        let state = open_with_state();
+        let activity = build_activity(&state, Some("src/notes.xyz"));
+        assert_eq!(activity.state, "Editing notes.xyz");
+        assert!(!activity.metadata.contains_key("large_image"));
+        assert!(!activity.metadata.contains_key("large_text"));
+        // OpenCode identity still present.
+        assert_eq!(
+            activity.metadata.get("small_image"),
+            Some(&OPENCODE_LOGO_URL.to_string())
+        );
+    }
+
+    #[test]
+    fn known_generic_file_type_gets_appropriate_icon() {
+        // A recognized-but-plain file (text) gets a generic appropriate icon
+        // rather than no icon or a language-specific icon.
+        let state = open_with_state();
+        let activity = build_activity(&state, Some("src/notes.txt"));
+        let large_image = activity.metadata.get("large_image").unwrap();
+        assert!(
+            large_image.contains("document"),
+            "plain text should use the generic document icon, got {large_image}"
+        );
+        assert_eq!(
+            activity.metadata.get("large_text"),
+            Some(&"Text".to_string())
+        );
+    }
+
+    #[test]
+    fn icon_transitions_never_leave_a_stale_image() {
+        // The regression the resolver must prevent: switching from lib.rs to
+        // index.html replaces the Rust icon, and a subsequent unsupported
+        // file clears the large image entirely instead of keeping the old one.
+        let state = open_with_state();
+        let cases = [
+            ("src/lib.rs", Some("rust")),
+            ("src/index.html", Some("html")),
+            ("src/main.ts", Some("typescript")),
+            ("src/component.tsx", Some("react_ts")),
+            ("src/data.json", Some("json")),
+            ("src/image.svg", Some("svg")),
+            ("src/unknown.xyz", None),
+        ];
+        for (path, expected_substring) in cases {
+            let activity = build_activity(&state, Some(path));
+            match expected_substring {
+                Some(substring) => {
+                    let image = activity
+                        .metadata
+                        .get("large_image")
+                        .unwrap_or_else(|| panic!("{path} should have a large image"));
+                    assert!(
+                        image.contains(substring),
+                        "{path}: expected icon containing {substring:?}, got {image}"
+                    );
+                }
+                None => {
+                    assert!(
+                        !activity.metadata.contains_key("large_image"),
+                        "{path}: stale large image must be cleared"
+                    );
+                    assert!(!activity.metadata.contains_key("large_text"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn consecutive_files_never_reuse_the_previous_icon() {
+        let state = open_with_state();
+        let rust = build_activity(&state, Some("src/lib.rs"));
+        let html = build_activity(&state, Some("src/index.html"));
+        assert_ne!(
+            rust.metadata.get("large_image"),
+            html.metadata.get("large_image"),
+            "each file type must carry its own icon"
+        );
+    }
+
+    #[test]
     fn full_path_is_not_exposed() {
         let state = open_with_state();
-        let activity = build_activity(&state);
+        let activity = build_activity(&state, None);
         let details = activity.details.unwrap();
         assert!(!details.contains("Users"));
         assert!(!details.contains("C:\\"));
@@ -246,6 +514,7 @@ mod tests {
             session_id: Some("ses_123".to_string()),
             directory: Some(dir.to_string()),
             title: Some("MyProject".to_string()),
+            files: Vec::new(),
         }
     }
 
@@ -254,9 +523,9 @@ mod tests {
         let mut plugin = OpenCodePlugin::new();
         let state = open_with_state();
 
-        assert!(plugin.observe_state(&state).unwrap().is_some());
+        assert!(plugin.observe_state(&state, None).unwrap().is_some());
         // Identical poll -> no new activity.
-        assert!(plugin.observe_state(&state).unwrap().is_none());
+        assert!(plugin.observe_state(&state, None).unwrap().is_none());
     }
 
     #[test]
@@ -264,14 +533,35 @@ mod tests {
         let mut plugin = OpenCodePlugin::new();
         let state = open_with_state();
 
-        assert!(plugin.observe_state(&state).unwrap().is_some());
-        assert!(plugin.observe_state(&state).unwrap().is_none());
+        assert!(plugin.observe_state(&state, None).unwrap().is_some());
+        assert!(plugin.observe_state(&state, None).unwrap().is_none());
 
         // Application exits.
         assert!(plugin.application_not_found().is_err());
 
         // Reopens -> activity is published again.
-        assert!(plugin.observe_state(&state).unwrap().is_some());
+        assert!(plugin.observe_state(&state, None).unwrap().is_some());
+    }
+
+    #[test]
+    fn plugin_republishes_when_file_changes() {
+        let mut plugin = OpenCodePlugin::new();
+        let state = open_with_state();
+
+        assert!(plugin
+            .observe_state(&state, Some("src/main.rs"))
+            .unwrap()
+            .is_some());
+        // Same file -> deduped.
+        assert!(plugin
+            .observe_state(&state, Some("src/main.rs"))
+            .unwrap()
+            .is_none());
+        // Different file -> published again.
+        assert!(plugin
+            .observe_state(&state, Some("src/app.ts"))
+            .unwrap()
+            .is_some());
     }
 
     #[test]
@@ -279,10 +569,42 @@ mod tests {
         let mut plugin = OpenCodePlugin::new();
         let state = OpenCodeState::default();
         let activity = plugin
-            .observe_state(&state)
+            .observe_state(&state, None)
             .unwrap()
             .expect("should publish");
         assert_eq!(activity.state, "Idle");
+    }
+
+    // -- File-view heuristic ----------------------------------------------------
+
+    #[test]
+    fn advance_tracking_picks_newly_discovered_file() {
+        let mut viewed = Vec::new();
+        let files = vec!["a.rs".to_string(), "b.rs".to_string()];
+        let current = advance_file_tracking(&mut viewed, &files);
+        assert_eq!(current.as_deref(), Some("b.rs"));
+        assert_eq!(viewed.len(), 2);
+    }
+
+    #[test]
+    fn advance_tracking_returns_none_without_new_files() {
+        let mut viewed = vec!["a.rs".to_string(), "b.rs".to_string()];
+        let files = vec!["a.rs".to_string(), "b.rs".to_string()];
+        let current = advance_file_tracking(&mut viewed, &files);
+        assert!(current.is_none());
+        assert_eq!(viewed.len(), 2);
+    }
+
+    #[test]
+    fn advance_tracking_appends_only_new_files() {
+        let mut viewed = vec!["a.rs".to_string()];
+        let files = vec!["a.rs".to_string(), "b.rs".to_string(), "c.rs".to_string()];
+        let current = advance_file_tracking(&mut viewed, &files);
+        assert_eq!(current.as_deref(), Some("c.rs"));
+        assert_eq!(
+            viewed,
+            vec!["a.rs".to_string(), "b.rs".to_string(), "c.rs".to_string()]
+        );
     }
 
     #[test]

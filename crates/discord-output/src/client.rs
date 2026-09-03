@@ -345,6 +345,7 @@ impl Drop for DiscordClient {
 // ---------------------------------------------------------------------------
 
 /// Build an ActivityData from canonical Activity fields.
+#[allow(clippy::too_many_arguments)]
 pub fn build_activity_data(
     state: &str,
     details: Option<&str>,

@@ -45,7 +45,7 @@ pub trait Output: Send {
     /// Publish an activity from the given source to this output.
     ///
     /// `source` is the engine's source identity string (the plugin's
-    /// metadata name, e.g. "League of Legends"). Outputs that need to
+    /// metadata name, e.g. "Antigravity"). Outputs that need to
     /// distinguish plugins (e.g. Discord, to select a per-plugin
     /// application ID) use it; other outputs may ignore it.
     ///
@@ -161,21 +161,21 @@ pub trait Output: Send {
 /// let mut engine = PresenceEngine::new();
 /// engine.register_output(Box::new(ConsoleOutput::new()));
 ///
-/// let game = Activity {
-///     state: "InGame".to_string(),
+/// let coding = Activity {
+///     state: "Coding".to_string(),
 ///     details: None,
 ///     timestamps: None,
 ///     application: None,
 ///     metadata: HashMap::new(),
 /// };
 ///
-/// // A game publishes its presence…
-/// engine.update("League of Legends", &game);
+/// // An app publishes its presence…
+/// engine.update("Antigravity", &coding);
 ///
 /// // …then another plugin's poll fails (its app closed). Only that
-/// // plugin's session ends; the game's presence stays visible.
+/// // plugin's session ends; the active presence stays visible.
 /// engine.end_session("FL Studio");
-/// assert_eq!(engine.current_activity().unwrap().state, "InGame");
+/// assert_eq!(engine.current_activity().unwrap().state, "Coding");
 /// ```
 pub struct PresenceEngine {
     /// Per-plugin sessions, keyed by the plugin's opaque source name.
@@ -1261,8 +1261,8 @@ mod tests {
     #[test]
     fn engine_shutdown_clears_presence_for_any_displayed_plugin() {
         // Graceful shutdown must deliver clear() to every registered output
-        // regardless of which plugin owns the display. Exercises the League
-        // of Legends and FL Studio source identities (the same sources the
+        // regardless of which plugin owns the display. Exercises the Antigravity
+        // and FL Studio source identities (the same sources the
         // real runtime publishes) to prove plugin independence.
         use std::sync::atomic::AtomicUsize;
         use std::sync::Arc;
@@ -1285,15 +1285,15 @@ mod tests {
             clear_count: clear_count.clone(),
         }));
 
-        // 1. League of Legends owns the display.
-        let league_activity = Activity {
-            state: "In Game".to_string(),
-            details: Some("ARAM".to_string()),
+        // 1. Antigravity owns the display.
+        let antigravity_activity = Activity {
+            state: "Coding".to_string(),
+            details: Some("Working on task".to_string()),
             timestamps: None,
             metadata: HashMap::new(),
             application: None,
         };
-        engine.update("League of Legends", &league_activity);
+        engine.update("Antigravity", &antigravity_activity);
         assert_eq!(
             clear_count.load(Ordering::SeqCst),
             0,
@@ -1305,7 +1305,7 @@ mod tests {
         assert_eq!(
             clear_count.load(Ordering::SeqCst),
             1,
-            "shutdown must clear outputs after a League session"
+            "shutdown must clear outputs after an Antigravity session"
         );
         assert!(engine.current_activity().is_none());
 
@@ -1539,19 +1539,19 @@ mod tests {
             published: published.clone(),
         }));
 
-        engine.update("League of Legends", &test_activity("InGame"));
+        engine.update("Antigravity", &test_activity("Coding"));
         assert_eq!(
             *published.lock().unwrap(),
-            vec!["League of Legends".to_string()],
+            vec!["Antigravity".to_string()],
             "first owner publishes its own source"
         );
 
-        // FL Studio updates while League owns the display: stored, not
+        // FL Studio updates while Antigravity owns the display: stored, not
         // published, and must not reach the output (no Discord switch).
         engine.update("FL Studio", &test_activity("Editing"));
         assert_eq!(
             *published.lock().unwrap(),
-            vec!["League of Legends".to_string()],
+            vec!["Antigravity".to_string()],
             "non-owner updates must not be published"
         );
 
@@ -1560,7 +1560,7 @@ mod tests {
         engine.set_foreground_source(Some("FL Studio"));
         assert_eq!(
             *published.lock().unwrap(),
-            vec!["League of Legends".to_string(), "FL Studio".to_string()],
+            vec!["Antigravity".to_string(), "FL Studio".to_string()],
             "displayed owner switch publishes the new source"
         );
     }
@@ -1880,18 +1880,18 @@ mod tests {
     }
 
     #[test]
-    fn foreground_ownership_acceptance_sequence_league_flstudio_brave_league() {
-        // Acceptance scenario: League -> FL Studio -> Brave -> League must
-        // yield League -> FL Studio -> FL Studio -> League with no clears.
-        // Mirrors the real window identities from the League and FL Studio plugins.
+    fn foreground_ownership_acceptance_sequence_antigravity_flstudio_brave_antigravity() {
+        // Acceptance scenario: Antigravity -> FL Studio -> Brave -> Antigravity must
+        // yield Antigravity -> FL Studio -> FL Studio -> Antigravity with no clears.
+        // Mirrors the real window identities from the Antigravity and FL Studio plugins.
         let (mut engine, _publishes, clears, last_state) = tracking_engine();
 
-        engine.update("League of Legends", &test_activity("InGame"));
-        engine.set_foreground_source(Some("League of Legends"));
+        engine.update("Antigravity", &test_activity("Coding"));
+        engine.set_foreground_source(Some("Antigravity"));
         assert_eq!(
             engine.current_activity().unwrap().state,
-            "InGame",
-            "League owns while foreground"
+            "Coding",
+            "Antigravity owns while foreground"
         );
 
         engine.update("FL Studio", &test_activity("Editing"));
@@ -1911,17 +1911,17 @@ mod tests {
         );
         assert_eq!(&*last_state.lock().unwrap(), &Some("Editing".to_string()));
 
-        engine.set_foreground_source(Some("League of Legends"));
+        engine.set_foreground_source(Some("Antigravity"));
         assert_eq!(
             engine.current_activity().unwrap().state,
-            "InGame",
+            "Coding",
             "back to a supported app restores its activity"
         );
-        assert_eq!(&*last_state.lock().unwrap(), &Some("InGame".to_string()));
+        assert_eq!(&*last_state.lock().unwrap(), &Some("Coding".to_string()));
         assert_eq!(
             clears.load(Ordering::SeqCst),
             0,
-            "presence must never be cleared"
+            "ownership transfers must not issue clears"
         );
     }
 
