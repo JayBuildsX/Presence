@@ -48,6 +48,8 @@ pub struct PresenceView {
 pub struct LiveState {
     /// Global pause flag.
     pub paused: bool,
+    /// Current polling interval in milliseconds.
+    pub poll_interval_ms: u64,
     /// Whether any output currently reports a live connection.
     pub discord_connected: bool,
     /// Source owning the display, if any.

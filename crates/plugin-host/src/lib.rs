@@ -290,6 +290,11 @@ impl PluginHost {
         &self.plugins
     }
 
+    /// Returns a mutable slice of all registered plugins.
+    pub fn plugins_mut(&mut self) -> &mut [Box<dyn Plugin>] {
+        &mut self.plugins
+    }
+
     /// Disables or re-enables a registered source.
     ///
     /// A disabled source stays registered but is skipped by
@@ -298,9 +303,23 @@ impl PluginHost {
     /// source's engine session so the display falls back immediately.
     pub fn set_source_disabled(&mut self, source: &str, disabled: bool) {
         if disabled {
-            self.disabled.insert(source.to_string());
-        } else {
-            self.disabled.remove(source);
+            if self.disabled.insert(source.to_string()) {
+                if let Some(plugin) = self
+                    .plugins
+                    .iter_mut()
+                    .find(|p| p.metadata().name == source)
+                {
+                    let _ = plugin.shutdown();
+                }
+            }
+        } else if self.disabled.remove(source) {
+            if let Some(plugin) = self
+                .plugins
+                .iter_mut()
+                .find(|p| p.metadata().name == source)
+            {
+                let _ = plugin.init();
+            }
         }
     }
 

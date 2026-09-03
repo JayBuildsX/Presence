@@ -395,6 +395,7 @@ impl Runtime {
 
         LiveState {
             paused: self.paused,
+            poll_interval_ms: self.poll_interval.as_millis() as u64,
             discord_connected: self.engine.any_output_connected(),
             owner,
             current,
@@ -406,6 +407,21 @@ impl Runtime {
     /// be persisted back to the same file.
     pub fn set_config_path(&mut self, path: Option<PathBuf>) {
         self.config_path = path;
+    }
+
+    /// Updates the polling cadence and persists it to configuration.
+    pub fn set_poll_interval_ms(&mut self, interval_ms: u64) -> Result<(), String> {
+        let clamped = interval_ms.max(presencehub_core::RuntimeConfig::MIN_POLL_INTERVAL_MS);
+        self.poll_interval = Duration::from_millis(clamped);
+        self.config.runtime.poll_interval_ms = clamped;
+        info!(poll_interval_ms = clamped, "Updated polling interval");
+
+        if let Some(path) = self.config_path.clone() {
+            self.config
+                .save(&path)
+                .map_err(|e| format!("Failed to persist configuration: {e}"))?;
+        }
+        Ok(())
     }
 
     /// Enables or disables a plugin at runtime (GUI toggle).
@@ -425,8 +441,28 @@ impl Runtime {
             unknown => return Err(format!("Unknown plugin: {unknown}")),
         }
 
+        // If the plugin was not registered at startup, instantiate and register it now.
+        if enabled && !self.host.plugins().iter().any(|p| p.metadata().name == source) {
+            let plugin: Box<dyn presencehub_plugin_host::Plugin> = match source {
+                "FL Studio" => Box::new(presencehub_flstudio::FlStudioPlugin::new()),
+                "Antigravity" => Box::new(presencehub_antigravity::AntigravityPlugin::new()),
+                "OpenCode" => Box::new(presencehub_opencode::OpenCodePlugin::new()),
+                _ => unreachable!(),
+            };
+            self.host.register(plugin);
+            if let Some(p) = self
+                .host
+                .plugins_mut()
+                .iter_mut()
+                .find(|p| p.metadata().name == source)
+            {
+                let _ = p.init();
+            }
+        }
+
         self.host.set_source_disabled(source, !enabled);
         if enabled {
+            self.poll_errors.polled_ok(source);
             info!(source = %source, "Plugin enabled");
         } else {
             self.engine.end_session(source);

@@ -50,6 +50,7 @@ impl PluginRegistry {
     ///     plugins.push(Box::new(MyPlugin::new()));
     /// }
     /// ```
+    #[allow(dead_code)]
     pub fn create_enabled_plugins(config: &Config) -> Vec<Box<dyn Plugin>> {
         let mut plugins: Vec<Box<dyn Plugin>> = Vec::new();
 
@@ -70,6 +71,19 @@ impl PluginRegistry {
         // if config.plugins.vscode { plugins.push(Box::new(VSCodePlugin::new())); }
 
         plugins
+    }
+
+    /// Constructs all supported plugins regardless of initial enable state.
+    ///
+    /// The runtime registers all plugins with `PluginHost` and applies
+    /// enable/disable flags so plugins can be toggled on and off dynamically
+    /// at runtime without needing application restart.
+    pub fn create_all_plugins() -> Vec<Box<dyn Plugin>> {
+        vec![
+            Box::new(FlStudioPlugin::new()),
+            Box::new(AntigravityPlugin::new()),
+            Box::new(OpenCodePlugin::new()),
+        ]
     }
 }
 

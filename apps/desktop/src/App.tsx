@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
-import { getState, setPaused, setPluginEnabled } from "./api";
+import { getState, setPaused, setPluginEnabled, setPollInterval } from "./api";
 import type { LiveState } from "./types";
 import CurrentPresence from "./components/CurrentPresence";
 import Header from "./components/Header";
 import PluginList from "./components/PluginList";
+import Settings from "./components/Settings";
 
 const REFRESH_INTERVAL_MS = 1000;
 
 function App() {
   const [state, setState] = useState<LiveState | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Name of the plugin with an in-flight toggle, or "pause" for pause.
+  const [showSettings, setShowSettings] = useState(false);
+  // Name of the plugin with an in-flight toggle, "pause", or "interval".
   const [pending, setPending] = useState<string | null>(null);
   const mounted = useRef(true);
 
@@ -73,12 +75,17 @@ function App() {
     void runCommand("pause", () => setPaused(!state.paused));
   }
 
+  function handleSelectInterval(intervalMs: number) {
+    void runCommand("interval", () => setPollInterval(intervalMs));
+  }
+
   return (
     <div className="app">
       <Header
         state={
           state ?? {
             paused: false,
+            poll_interval_ms: 1000,
             discord_connected: false,
             owner: null,
             current: null,
@@ -86,7 +93,9 @@ function App() {
           }
         }
         busy={state === null || pending !== null}
+        showSettings={showSettings}
         onTogglePause={handleTogglePause}
+        onToggleSettings={() => setShowSettings(!showSettings)}
       />
       {error && (
         <div className="error-bar" role="alert">
@@ -99,6 +108,13 @@ function App() {
         <>
           <CurrentPresence state={state} />
           <PluginList state={state} pending={pending} onToggle={handleTogglePlugin} />
+          {showSettings && (
+            <Settings
+              state={state}
+              pending={pending}
+              onSelectInterval={handleSelectInterval}
+            />
+          )}
         </>
       )}
     </div>

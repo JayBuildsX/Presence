@@ -91,6 +91,9 @@ pub fn run() {
             commands::get_state,
             commands::set_plugin_enabled,
             commands::set_paused,
+            commands::set_poll_interval,
+            commands::minimize_window,
+            commands::close_window,
         ])
         .setup(|app| {
             // Drive polling on a background task; each iteration locks the

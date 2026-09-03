@@ -36,3 +36,26 @@ pub async fn set_paused(state: State<'_, AppState>, paused: bool) -> Result<Live
     runtime.set_paused(paused);
     Ok(runtime.snapshot())
 }
+
+/// Updates the polling interval in the backend and persists it. Returns the fresh snapshot.
+#[tauri::command]
+pub async fn set_poll_interval(
+    state: State<'_, AppState>,
+    interval_ms: u64,
+) -> Result<LiveState, String> {
+    let mut runtime = state.runtime.lock().await;
+    runtime.set_poll_interval_ms(interval_ms)?;
+    Ok(runtime.snapshot())
+}
+
+/// Minimizes the application window.
+#[tauri::command]
+pub async fn minimize_window(window: tauri::Window) -> Result<(), String> {
+    window.minimize().map_err(|e| e.to_string())
+}
+
+/// Closes or hides the application window.
+#[tauri::command]
+pub async fn close_window(window: tauri::Window) -> Result<(), String> {
+    window.close().map_err(|e| e.to_string())
+}

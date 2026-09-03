@@ -15,3 +15,16 @@ export async function setPluginEnabled(
 export async function setPaused(paused: boolean): Promise<LiveState> {
   return invoke<LiveState>("set_paused", { paused });
 }
+
+export async function setPollInterval(intervalMs: number): Promise<LiveState> {
+  return invoke<LiveState>("set_poll_interval", { intervalMs });
+}
+
+export async function minimizeWindow(): Promise<void> {
+  return invoke<void>("minimize_window");
+}
+
+export async function closeWindow(): Promise<void> {
+  return invoke<void>("close_window");
+}
+

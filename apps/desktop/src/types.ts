@@ -16,6 +16,7 @@ export interface PresenceView {
 
 export interface LiveState {
   paused: boolean;
+  poll_interval_ms: number;
   discord_connected: boolean;
   owner: string | null;
   current: PresenceView | null;
