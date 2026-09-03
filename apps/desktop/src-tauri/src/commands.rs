@@ -80,3 +80,67 @@ pub async fn quit_app(app: tauri::AppHandle) -> Result<(), String> {
     app.exit(0);
     Ok(())
 }
+
+/// Manually pins or unpins a source as the primary presence.
+#[tauri::command]
+pub async fn set_pinned_source(
+    state: State<'_, AppState>,
+    source: Option<String>,
+) -> Result<LiveState, String> {
+    let mut runtime = state.runtime.lock().await;
+    runtime.set_pinned_source(source);
+    Ok(runtime.snapshot())
+}
+
+/// Returns whether PresenceHub is set to auto-start with Windows.
+#[tauri::command]
+pub async fn get_autostart_status() -> Result<bool, String> {
+    let output = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
+            "PresenceHub",
+        ])
+        .output()
+        .map_err(|e| format!("Failed to query registry: {e}"))?;
+    Ok(output.status.success())
+}
+
+/// Enables or disables auto-start with Windows (with --minimized flag).
+#[tauri::command]
+pub async fn set_autostart(enabled: bool) -> Result<bool, String> {
+    if enabled {
+        let exe_path =
+            std::env::current_exe().map_err(|e| format!("Failed to get executable path: {e}"))?;
+        let cmd_value = format!("\"{}\" --minimized", exe_path.to_string_lossy());
+        let status = std::process::Command::new("reg")
+            .args([
+                "add",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "PresenceHub",
+                "/t",
+                "REG_SZ",
+                "/d",
+                &cmd_value,
+                "/f",
+            ])
+            .status()
+            .map_err(|e| format!("Failed to execute reg command: {e}"))?;
+        if !status.success() {
+            return Err("Failed to add registry entry for auto-start".to_string());
+        }
+    } else {
+        let _ = std::process::Command::new("reg")
+            .args([
+                "delete",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "PresenceHub",
+                "/f",
+            ])
+            .status();
+    }
+    get_autostart_status().await
+}

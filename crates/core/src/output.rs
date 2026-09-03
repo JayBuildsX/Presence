@@ -203,6 +203,8 @@ pub struct PresenceEngine {
     foreground: Option<String>,
     /// The source currently owning the display, if any.
     displayed: Option<String>,
+    /// Manually pinned source that overrides foreground switching when active.
+    pinned: Option<String>,
     /// Monotonic activity counter used to order sources for the recent
     /// ownership policy.
     recency: u64,
@@ -249,6 +251,7 @@ impl PresenceEngine {
             unsupported_foreground: UnsupportedForegroundPolicy::default(),
             foreground: None,
             displayed: None,
+            pinned: None,
             recency: 0,
         }
     }
@@ -295,6 +298,23 @@ impl PresenceEngine {
             return Vec::new();
         }
         self.foreground = next;
+        self.reconcile()
+    }
+
+    /// Returns the currently pinned source, if any.
+    pub fn pinned_source(&self) -> Option<&str> {
+        self.pinned.as_deref()
+    }
+
+    /// Sets or unsets the pinned source override.
+    ///
+    /// When a source is pinned and active, it takes absolute precedence over
+    /// foreground window switching. The display owner is recalculated immediately.
+    pub fn set_pinned_source(&mut self, source: Option<String>) -> Vec<(usize, OutputError)> {
+        if self.pinned == source {
+            return Vec::new();
+        }
+        self.pinned = source;
         self.reconcile()
     }
 
@@ -602,6 +622,15 @@ impl PresenceEngine {
     /// order, per-source recency, and the current foreground source — never
     /// on a plugin's name.
     fn selected_source(&self) -> Option<String> {
+        // A pinned source takes absolute precedence as long as it is active.
+        if let Some(source) = self
+            .pinned
+            .as_deref()
+            .filter(|source| self.is_active(source))
+        {
+            return Some(source.to_string());
+        }
+
         match self.policy {
             OwnershipPolicy::Foreground => {
                 // A supported application in the foreground owns the display.
@@ -2191,6 +2220,57 @@ mod tests {
         assert_eq!(
             last.unwrap().details,
             Some("Project: song.flp*".to_string())
+        );
+    }
+
+    #[test]
+    fn pinned_source_overrides_foreground_switching() {
+        let (mut engine, _publishes, _clears, last_state) = tracking_engine();
+
+        let fl_activity = Activity {
+            state: "Arranging Beat".to_string(),
+            details: Some("Project: Trap.flp".to_string()),
+            timestamps: None,
+            metadata: HashMap::new(),
+            application: None,
+        };
+        let agy_activity = Activity {
+            state: "Coding Agent".to_string(),
+            details: Some("Project: PresenceHUB".to_string()),
+            timestamps: None,
+            metadata: HashMap::new(),
+            application: None,
+        };
+
+        engine.update("FL Studio", &fl_activity);
+        engine.update("Antigravity", &agy_activity);
+
+        // Normally, foreground focus determines owner
+        engine.set_foreground_source(Some("Antigravity"));
+        assert_eq!(engine.displayed_source(), Some("Antigravity"));
+        assert_eq!(
+            &*last_state.lock().unwrap(),
+            &Some("Coding Agent".to_string())
+        );
+
+        // Pin FL Studio as primary override
+        engine.set_pinned_source(Some("FL Studio".to_string()));
+        assert_eq!(engine.displayed_source(), Some("FL Studio"));
+        assert_eq!(
+            &*last_state.lock().unwrap(),
+            &Some("Arranging Beat".to_string())
+        );
+
+        // Even if foreground changes to Antigravity, FL Studio remains displayed
+        engine.set_foreground_source(Some("Antigravity"));
+        assert_eq!(engine.displayed_source(), Some("FL Studio"));
+
+        // If FL Studio closes, it falls back to Antigravity
+        engine.end_session("FL Studio");
+        assert_eq!(engine.displayed_source(), Some("Antigravity"));
+        assert_eq!(
+            &*last_state.lock().unwrap(),
+            &Some("Coding Agent".to_string())
         );
     }
 }

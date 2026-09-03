@@ -4,6 +4,7 @@ import {
   getState,
   reconnectDiscord,
   setPaused,
+  setPinnedSource,
   setPluginEnabled,
   setPollInterval,
 } from "./api";
@@ -89,6 +90,12 @@ function App() {
     void runCommand("reconnect", () => reconnectDiscord());
   }
 
+  function handleTogglePriority(name: string) {
+    if (!state) return;
+    const nextPriority = state.pinned_source === name ? null : name;
+    void runCommand("priority", () => setPinnedSource(nextPriority));
+  }
+
   return (
     <div className="app">
       <Header
@@ -99,6 +106,7 @@ function App() {
             discord_connected: false,
             owner: null,
             current: null,
+            pinned_source: null,
             plugins: [],
           }
         }
@@ -118,7 +126,12 @@ function App() {
       ) : (
         <>
           <CurrentPresence state={state} />
-          <PluginList state={state} pending={pending} onToggle={handleTogglePlugin} />
+          <PluginList
+            state={state}
+            pending={pending}
+            onToggle={handleTogglePlugin}
+            onTogglePriority={handleTogglePriority}
+          />
           {showSettings && (
             <Settings
               state={state}

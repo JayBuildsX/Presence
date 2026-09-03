@@ -5,6 +5,7 @@ interface PluginListProps {
   state: LiveState;
   pending: string | null;
   onToggle: (name: string, enabled: boolean) => void;
+  onTogglePriority?: (name: string) => void;
 }
 
 function statusDot(plugin: PluginView): string {
@@ -14,7 +15,12 @@ function statusDot(plugin: PluginView): string {
   return plugin.active ? "dot-live" : "dot-idle";
 }
 
-export default function PluginList({ state, pending, onToggle }: PluginListProps) {
+export default function PluginList({
+  state,
+  pending,
+  onToggle,
+  onTogglePriority,
+}: PluginListProps) {
   return (
     <section className="plugins-section" aria-label="Plugins">
       <div className="section-header">
@@ -24,9 +30,11 @@ export default function PluginList({ state, pending, onToggle }: PluginListProps
       <div className="plugin-list">
         {state.plugins.map((plugin) => {
           const isOwner = state.owner === plugin.name && plugin.active && !state.paused;
+          const isPrioritized = state.pinned_source === plugin.name;
           const cardClass = [
             "plugin-card",
             isOwner ? "is-owner" : "",
+            isPrioritized ? "is-prioritized-card" : "",
             !plugin.enabled ? "is-disabled" : "",
             plugin.enabled && plugin.active ? "is-active" : "",
           ]
@@ -41,6 +49,7 @@ export default function PluginList({ state, pending, onToggle }: PluginListProps
                 <div className="plugin-info">
                   <div className="plugin-title-row">
                     <span className="plugin-name">{plugin.name}</span>
+                    {isPrioritized && <span className="priority-badge">★ Priority</span>}
                     {isOwner && <span className="owner-badge">Broadcasting</span>}
                   </div>
                   <div className="plugin-status-row">
@@ -50,6 +59,33 @@ export default function PluginList({ state, pending, onToggle }: PluginListProps
                 </div>
               </div>
               <div className="plugin-right">
+                {plugin.enabled && onTogglePriority && (
+                  <button
+                    type="button"
+                    className={`priority-btn ${isPrioritized ? "is-prioritized" : ""}`}
+                    disabled={busy}
+                    onClick={() => onTogglePriority(plugin.name)}
+                    title={
+                      isPrioritized
+                        ? "Prioritized application (Click to remove priority)"
+                        : `Set ${plugin.name} as priority application`
+                    }
+                    aria-label={`Prioritize ${plugin.name}`}
+                  >
+                    <svg
+                      width="13"
+                      height="13"
+                      viewBox="0 0 24 24"
+                      fill={isPrioritized ? "currentColor" : "none"}
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                    </svg>
+                  </button>
+                )}
                 <button
                   type="button"
                   role="switch"

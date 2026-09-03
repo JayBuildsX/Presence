@@ -20,5 +20,7 @@ export interface LiveState {
   discord_connected: boolean;
   owner: string | null;
   current: PresenceView | null;
+  pinned_source: string | null;
   plugins: PluginView[];
 }
+

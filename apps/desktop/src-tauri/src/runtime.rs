@@ -443,8 +443,14 @@ impl Runtime {
             discord_connected: self.engine.any_output_connected(),
             owner,
             current,
+            pinned_source: self.engine.pinned_source().map(str::to_owned),
             plugins,
         }
+    }
+
+    /// Sets or unsets a manually pinned plugin source.
+    pub fn set_pinned_source(&mut self, source: Option<String>) {
+        let _ = self.engine.set_pinned_source(source);
     }
 
     /// Records where the configuration was loaded from, so GUI toggles can

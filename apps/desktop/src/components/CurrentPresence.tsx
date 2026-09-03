@@ -8,7 +8,11 @@ export default function CurrentPresence({ state }: { state: LiveState }) {
     <section className="presence-section" aria-label="Current presence">
       <div className="section-header">
         <h2 className="section-label">Active Presence</h2>
-        {isLive && <span className="live-indicator-tag"><span className="pulse-dot" /> Broadcasting to Discord</span>}
+        {isLive && (
+          <span className="live-indicator-tag">
+            <span className="pulse-dot" /> Broadcasting to Discord
+          </span>
+        )}
       </div>
       <div className={`presence-card ${isLive ? "is-live" : "is-empty"}`}>
         {state.current ? (
@@ -51,4 +55,5 @@ export default function CurrentPresence({ state }: { state: LiveState }) {
     </section>
   );
 }
+
 

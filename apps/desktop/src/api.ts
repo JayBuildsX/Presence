@@ -40,5 +40,18 @@ export async function quitApp(): Promise<void> {
   return invoke<void>("quit_app");
 }
 
+export async function setPinnedSource(source: string | null): Promise<LiveState> {
+  return invoke<LiveState>("set_pinned_source", { source });
+}
+
+export async function getAutostartStatus(): Promise<boolean> {
+  return invoke<boolean>("get_autostart_status");
+}
+
+export async function setAutostart(enabled: boolean): Promise<boolean> {
+  return invoke<boolean>("set_autostart", { enabled });
+}
+
+
 
 

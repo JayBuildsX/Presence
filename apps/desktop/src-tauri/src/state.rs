@@ -56,6 +56,8 @@ pub struct LiveState {
     pub owner: Option<String>,
     /// Currently published activity, if any.
     pub current: Option<PresenceView>,
+    /// Manually pinned source overriding foreground window switching.
+    pub pinned_source: Option<String>,
     /// One row per known plugin, in display order.
     pub plugins: Vec<PluginView>,
 }

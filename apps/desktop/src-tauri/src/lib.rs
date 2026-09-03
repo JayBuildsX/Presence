@@ -97,6 +97,9 @@ pub fn run() {
             commands::close_window,
             commands::reconnect_discord,
             commands::quit_app,
+            commands::set_pinned_source,
+            commands::get_autostart_status,
+            commands::set_autostart,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -106,6 +109,13 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // If launched with --minimized, hide to system tray on start
+            if std::env::args().any(|a| a == "--minimized") {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+
             // Setup System Tray
             let show_item = tauri::menu::MenuItem::with_id(
                 app,

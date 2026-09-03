@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import type { LiveState, PluginView } from "../types";
 
 function StatusDot({ className }: { className: string }) {
@@ -21,78 +20,40 @@ export function globalStatus(state: LiveState): {
   return { label: "Watching", dot: "dot-idle" };
 }
 
+const APP_ICONS: Record<string, string> = {
+  "FL Studio": "/flstudio.png",
+  Antigravity: "/antigravity.png",
+  OpenCode: "/opencode.png",
+};
+
 export function PluginIcon({ name }: { name: string }) {
-  const icons: Record<string, ReactNode> = {
-    "FL Studio": (
-      <svg
-        width="20"
-        height="20"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="M9 18V5l12-2v13" />
-        <circle cx="6" cy="18" r="3" />
-        <circle cx="18" cy="16" r="3" />
-      </svg>
-    ),
-    Antigravity: (
-      <svg
-        width="20"
-        height="20"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <circle cx="12" cy="12" r="3" />
-        <path d="M12 2v2" />
-        <path d="M12 20v2" />
-        <path d="m4.93 4.93 1.41 1.41" />
-        <path d="m17.66 17.66 1.41 1.41" />
-        <path d="M2 12h2" />
-        <path d="M20 12h2" />
-        <path d="m6.34 17.66-1.41 1.41" />
-        <path d="m19.07 4.93-1.41 1.41" />
-      </svg>
-    ),
-    OpenCode: (
-      <svg
-        width="20"
-        height="20"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <polyline points="16 18 22 12 16 6" />
-        <polyline points="8 6 2 12 8 18" />
-        <line x1="14" y1="4" x2="10" y2="20" />
-      </svg>
-    ),
-  };
+  const iconSrc = APP_ICONS[name];
+
+  if (iconSrc) {
+    return (
+      <span className={`plugin-brand-icon brand-${name.toLowerCase().replace(/\s+/g, "")}`}>
+        <img
+          src={iconSrc}
+          alt={name}
+          className="plugin-real-icon"
+          loading="lazy"
+        />
+      </span>
+    );
+  }
 
   return (
     <span className={`plugin-brand-icon brand-${name.toLowerCase().replace(/\s+/g, "")}`}>
-      {icons[name] ?? (
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-        >
-          <circle cx="12" cy="12" r="6" />
-        </svg>
-      )}
+      <svg
+        width="20"
+        height="20"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+      >
+        <circle cx="12" cy="12" r="6" />
+      </svg>
     </span>
   );
 }

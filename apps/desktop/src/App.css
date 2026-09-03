@@ -488,31 +488,39 @@
 .plugin-title-row {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  min-width: 0;
 }
 
 .plugin-name {
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .owner-badge {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.4px;
   background: rgba(35, 165, 90, 0.15);
   color: #72e096;
   border: 1px solid rgba(35, 165, 90, 0.3);
-  padding: 0 5px;
+  padding: 1px 5px;
   border-radius: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .plugin-status-row {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .plugin-status {
@@ -524,7 +532,10 @@
 }
 
 .plugin-right {
-  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
   margin-left: var(--space-2);
 }
 
@@ -757,5 +768,70 @@
   color: var(--text-tertiary);
   margin-top: 1px;
 }
+
+.settings-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: var(--space-3) 0;
+}
+
+/* Priority Button & Badge */
+.priority-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.priority-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: #ffb800;
+  border-color: rgba(255, 184, 0, 0.3);
+}
+
+.priority-btn.is-prioritized {
+  color: #ffb800;
+  background: rgba(255, 184, 0, 0.14);
+  border-color: rgba(255, 184, 0, 0.4);
+  box-shadow: 0 0 8px rgba(255, 184, 0, 0.22);
+}
+
+.priority-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 184, 0, 0.12);
+  color: #ffb800;
+  border: 1px solid rgba(255, 184, 0, 0.3);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.is-prioritized-card {
+  border-color: rgba(255, 184, 0, 0.25) !important;
+}
+
+/* Real App PNG Icons */
+.plugin-real-icon {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  display: block;
+  border-radius: 4px;
+}
+
+
 
 
