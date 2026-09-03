@@ -1,7 +1,7 @@
 //! Antigravity discovery and process detection.
 //!
 //! Locates the Antigravity `brain/` directory, discovers conversation folders,
-//! and determines the most recently modified `task.md` file within the stale threshold.
+//! and determines the most recently modified plan file within the stale threshold.
 //! Also checks whether the Antigravity application process is running.
 
 use std::path::{Path, PathBuf};
@@ -9,6 +9,12 @@ use std::time::{Duration, SystemTime};
 
 /// Default stale threshold: 5 minutes (same as reference implementation).
 pub const DEFAULT_STALE_THRESHOLD: Duration = Duration::from_secs(5 * 60);
+
+/// Plan file names the agent writes, newest format first.
+///
+/// Current Antigravity writes `implementation_plan.md`; older versions wrote
+/// `task.md`. The freshest file of either kind marks the active conversation.
+pub const PLAN_FILENAMES: &[&str] = &["implementation_plan.md", "task.md"];
 
 /// Resolves the default Antigravity brain directory on Windows/cross-platform.
 ///
@@ -53,13 +59,20 @@ pub fn is_conversation_uuid(name: &str) -> bool {
 pub struct ActiveConversation {
     /// The conversation UUID directory name.
     pub conversation_id: String,
-    /// Absolute path to the `task.md` file.
-    pub task_file: PathBuf,
-    /// System modification time of `task.md`.
+    /// Newest plan file for title parsing (`implementation_plan.md` or
+    /// legacy `task.md`), if the conversation has one. Activity alone
+    /// (transcripts, logs) still marks the conversation active.
+    pub task_file: Option<PathBuf>,
+    /// Newest activity anywhere inside the conversation directory.
     pub modified: SystemTime,
 }
 
-/// Finds the most recently modified `task.md` in the brain directory within `stale_threshold`.
+/// Finds the most recently active conversation in the brain directory.
+///
+/// Each conversation folder is scanned recursively: transcripts, logs,
+/// messages, task files, and plan files all count as agent activity. The
+/// conversation with the freshest file wins, provided it is within
+/// `stale_threshold`. A separate plan-file lookup feeds title parsing.
 pub fn find_active_conversation(
     brain_dir: &Path,
     stale_threshold: Duration,
@@ -81,25 +94,34 @@ pub fn find_active_conversation(
             continue;
         }
 
-        let task_file = path.join("task.md");
-        if let Ok(metadata) = std::fs::metadata(&task_file) {
-            if let Ok(mtime) = metadata.modified() {
-                if let Some(ref current) = newest {
-                    if mtime > current.modified {
-                        newest = Some(ActiveConversation {
-                            conversation_id: dir_name.to_string(),
-                            task_file,
-                            modified: mtime,
-                        });
-                    }
-                } else {
-                    newest = Some(ActiveConversation {
-                        conversation_id: dir_name.to_string(),
-                        task_file,
-                        modified: mtime,
-                    });
-                }
+        // Newest plan file at the conversation root, for title parsing.
+        let task_file = PLAN_FILENAMES
+            .iter()
+            .filter_map(|name| {
+                let candidate = path.join(name);
+                std::fs::metadata(&candidate).ok().map(|_| candidate)
+            })
+            .next();
+        // Newest activity anywhere inside the conversation: plan files,
+        // transcripts, logs, messages, uploads — any write means the
+        // agent (or the user with it) recently did something.
+        let Some(mtime) = newest_mtime_recursive(&path) else {
+            continue;
+        };
+        if let Some(ref current) = newest {
+            if mtime > current.modified {
+                newest = Some(ActiveConversation {
+                    conversation_id: dir_name.to_string(),
+                    task_file,
+                    modified: mtime,
+                });
             }
+        } else {
+            newest = Some(ActiveConversation {
+                conversation_id: dir_name.to_string(),
+                task_file,
+                modified: mtime,
+            });
         }
     }
 
@@ -113,6 +135,33 @@ pub fn find_active_conversation(
     }
 
     Some(active)
+}
+
+/// Newest file modification time anywhere under `dir` (recursive).
+///
+/// Returns `None` when the tree holds no readable files.
+fn newest_mtime_recursive(dir: &Path) -> Option<SystemTime> {
+    let mut newest: Option<SystemTime> = None;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let entries = match std::fs::read_dir(&current) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if let Ok(metadata) = std::fs::metadata(&path) {
+                if let Ok(mtime) = metadata.modified() {
+                    newest = Some(newest.map_or(mtime, |best| best.max(mtime)));
+                }
+            }
+        }
+    }
+    newest
 }
 
 /// Checks whether the Antigravity desktop application process is running.
@@ -201,7 +250,7 @@ mod tests {
 
         let active = find_active_conversation(&temp, Duration::from_secs(60)).unwrap();
         assert_eq!(active.conversation_id, uuid2);
-        assert_eq!(active.task_file, task2);
+        assert_eq!(active.task_file, Some(task2));
 
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -221,6 +270,72 @@ mod tests {
         // Stale threshold 0 secs -> immediately considered stale
         let active = find_active_conversation(&temp, Duration::from_secs(0));
         assert!(active.is_none());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn finds_implementation_plan_as_active_conversation() {
+        let temp = std::env::temp_dir().join("presencehub_test_plan_brain");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let uuid = "44444444-4444-4444-4444-444444444444";
+        let dir = temp.join(uuid);
+        std::fs::create_dir_all(&dir).unwrap();
+        let plan = dir.join("implementation_plan.md");
+        std::fs::write(&plan, "# Some Plan\n\n## Proposed Changes\n").unwrap();
+
+        let active = find_active_conversation(&temp, Duration::from_secs(60)).unwrap();
+        assert_eq!(active.conversation_id, uuid);
+        assert_eq!(active.task_file, Some(plan));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn newest_plan_file_wins_across_conversations_and_formats() {
+        let temp = std::env::temp_dir().join("presencehub_test_mixed_brain");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let uuid_old = "55555555-5555-5555-5555-555555555555";
+        let dir_old = temp.join(uuid_old);
+        std::fs::create_dir_all(&dir_old).unwrap();
+        std::fs::write(dir_old.join("task.md"), "# Old task\n").unwrap();
+
+        // Tiny delay so the plan file is strictly newer.
+        std::thread::sleep(Duration::from_millis(50));
+
+        let uuid_new = "66666666-6666-6666-6666-666666666666";
+        let dir_new = temp.join(uuid_new);
+        std::fs::create_dir_all(&dir_new).unwrap();
+        let plan = dir_new.join("implementation_plan.md");
+        std::fs::write(&plan, "# New plan\n").unwrap();
+
+        let active = find_active_conversation(&temp, Duration::from_secs(60)).unwrap();
+        assert_eq!(active.conversation_id, uuid_new);
+        assert_eq!(active.task_file, Some(plan));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn transcript_activity_without_plan_file_is_still_active() {
+        // Conversations whose agent only wrote transcripts/logs (no plan
+        // file yet) still mark the agent as working.
+        let temp = std::env::temp_dir().join("presencehub_test_transcript_brain");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let uuid = "77777777-7777-7777-7777-777777777777";
+        let logs = temp.join(uuid).join(".system_generated").join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join("transcript.jsonl"), "{}\n").unwrap();
+
+        let active = find_active_conversation(&temp, Duration::from_secs(60)).unwrap();
+        assert_eq!(active.conversation_id, uuid);
+        assert_eq!(active.task_file, None);
 
         let _ = std::fs::remove_dir_all(&temp);
     }

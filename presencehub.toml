@@ -15,6 +15,10 @@ discord = true
 discord_app_id = 1533559059125637311
 
 [outputs.discord_apps]
+OpenCode = 1273940066603106328
+Antigravity = 1440730997460172810
 "FL Studio" = 1192880494086455357
-"OpenCode" = 1273940066603106328
-"Antigravity" = 1440730997460172810
+
+[presence]
+ownership = "Foreground"
+unsupported_foreground = "KeepLast"

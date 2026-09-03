@@ -65,6 +65,41 @@ pub fn parse_task_md(content: &str) -> AntigravityState {
     }
 }
 
+/// Parses the contents of an `implementation_plan.md` file (current format).
+///
+/// The current format carries no in-progress markers: plan sections are
+/// written upfront and `walkthrough.md` summarizes completed work. The
+/// freshness of the file itself (enforced by the caller through the stale
+/// threshold) is the working signal.
+///
+/// - `# <Title>` sets the task name.
+/// - The last `## <Section>` header is reported as the active context.
+/// - `is_agent_working` is true when a title was found.
+pub fn parse_plan_md(content: &str) -> AntigravityState {
+    let mut main_header: Option<String> = None;
+    let mut section_header: Option<String> = None;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("# ") {
+            if main_header.is_none() {
+                main_header = Some(rest.trim().to_string());
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("## ") {
+            section_header = Some(rest.trim().to_string());
+        }
+    }
+
+    let is_agent_working = main_header.is_some();
+    AntigravityState {
+        main_header: main_header.clone(),
+        section_header: section_header.clone(),
+        active_task: section_header.clone(),
+        task_name: section_header.or(main_header),
+        is_agent_working,
+    }
+}
+
 /// Extracts the task description from a line containing `[/]`.
 ///
 /// Handles markdown formats such as:
@@ -205,5 +240,44 @@ mod tests {
             extract_in_progress_task("- [/] <!-- only comment -->"),
             None
         );
+    }
+
+    #[test]
+    fn parse_plan_md_uses_title_and_last_section() {
+        let content = "# Milestone 0.6 - Unit 3: KPSS Test Implementation Plan\n\
+                       \n\
+                       ## Proposed Changes\n\
+                       \n\
+                       ### Component: Statistics Domain\n\
+                       - Add `KPSSError`\n\
+                       \n\
+                       ## Verification Plan\n\
+                       \n\
+                       ### Automated Tests\n";
+        let state = parse_plan_md(content);
+        assert_eq!(
+            state.main_header.as_deref(),
+            Some("Milestone 0.6 - Unit 3: KPSS Test Implementation Plan")
+        );
+        assert_eq!(state.section_header.as_deref(), Some("Verification Plan"));
+        assert_eq!(state.active_task.as_deref(), Some("Verification Plan"));
+        assert_eq!(state.task_name.as_deref(), Some("Verification Plan"));
+        assert!(state.is_agent_working);
+    }
+
+    #[test]
+    fn parse_plan_md_without_sections_falls_back_to_title() {
+        let content = "# Lone Plan Title\n\n- step one\n";
+        let state = parse_plan_md(content);
+        assert_eq!(state.task_name.as_deref(), Some("Lone Plan Title"));
+        assert_eq!(state.active_task, None);
+        assert!(state.is_agent_working);
+    }
+
+    #[test]
+    fn parse_plan_md_empty_content_is_not_working() {
+        let state = parse_plan_md("");
+        assert!(!state.is_agent_working);
+        assert_eq!(state.task_name, None);
     }
 }

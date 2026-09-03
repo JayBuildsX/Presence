@@ -154,13 +154,30 @@ impl Plugin for AntigravityPlugin {
             return self.application_not_found();
         }
 
-        // Parse task.md if an active conversation is available
+        // A fresh conversation means the agent recently did something: parse
+        // the plan file for titles when there is one, and always report
+        // working. Freshness itself is the working signal; staleness falls
+        // back to idle below.
         let state = if let Some(ref conv) = active_conv {
             self.current_conversation_id = Some(conv.conversation_id.clone());
-            match std::fs::read_to_string(&conv.task_file) {
-                Ok(content) => state::parse_task_md(&content),
-                Err(_) => AntigravityState::default(),
-            }
+            let mut state = match conv.task_file.as_ref() {
+                Some(plan) => match std::fs::read_to_string(plan) {
+                    Ok(content) => {
+                        if plan
+                            .file_name()
+                            .is_some_and(|name| name == "implementation_plan.md")
+                        {
+                            state::parse_plan_md(&content)
+                        } else {
+                            state::parse_task_md(&content)
+                        }
+                    }
+                    Err(_) => AntigravityState::default(),
+                },
+                None => AntigravityState::default(),
+            };
+            state.is_agent_working = true;
+            state
         } else {
             self.current_conversation_id = None;
             AntigravityState::default()
