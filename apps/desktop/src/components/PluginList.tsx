@@ -32,7 +32,7 @@ export default function PluginList({ state, pending, onToggle }: PluginListProps
           ]
             .filter(Boolean)
             .join(" ");
-          const busy = pending === plugin.name;
+          const busy = pending !== null;
 
           return (
             <div className={cardClass} key={plugin.name}>

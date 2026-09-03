@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use presencehub_core::{activity::Activity, output::PresenceEngine, Config, Core};
 use presencehub_plugin_host::{PluginError, PluginHost, WindowIdentity};
@@ -70,6 +70,10 @@ pub struct Runtime {
     /// Filesystem path of the loaded configuration, used to persist GUI
     /// plugin toggles. `None` when no config file was found.
     config_path: Option<PathBuf>,
+    /// Whether the in-memory configuration has unsaved changes.
+    config_dirty: bool,
+    /// Last time the configuration was persisted (debounce baseline).
+    last_save: Option<Instant>,
     /// Per-source poll outcome tracker (transition-based log warnings).
     /// Stored on the runtime so single poll iterations can run outside
     /// [`run`](Runtime::run) (e.g. from the GUI thread).
@@ -149,6 +153,8 @@ impl Runtime {
             config,
             paused: false,
             config_path: None,
+            config_dirty: false,
+            last_save: None,
             poll_errors: PollErrorTracker::default(),
         }
     }
@@ -281,6 +287,14 @@ impl Runtime {
     /// so embedders (e.g. the GUI thread) can drive polling without taking
     /// over the blocking loop.
     pub fn poll_once(&mut self) {
+        // Opportunistically flush debounced configuration writes, even
+        // while paused (toggles still work when paused).
+        if self.config_dirty {
+            if let Err(e) = self.flush_config_if_due() {
+                warn!(error = %e, "Deferred configuration persist failed");
+            }
+        }
+
         if self.paused {
             return;
         }
@@ -475,11 +489,53 @@ impl Runtime {
             info!(source = %source, "Plugin disabled");
         }
 
+        // Mark dirty and persist immediately when due; otherwise the write
+        // is deferred to the poll loop so rapid toggles never queue disk
+        // I/O behind the runtime lock.
+        self.config_dirty = true;
+        self.flush_config_if_due()?;
+        Ok(())
+    }
+
+    /// Minimum interval between configuration file writes.
+    ///
+    /// Rapid GUI toggles mark the config dirty; the file is rewritten at
+    /// most this often so disk I/O never piles up behind the runtime lock.
+    const CONFIG_SAVE_DEBOUNCE: Duration = Duration::from_secs(2);
+
+    /// Persists the configuration when a write is due.
+    ///
+    /// No-op unless the config is dirty and the debounce interval has
+    /// elapsed since the last write. Failures leave the dirty flag set so
+    /// a later flush retries.
+    fn flush_config_if_due(&mut self) -> Result<(), String> {
+        if !self.config_dirty {
+            return Ok(());
+        }
+        let due = self
+            .last_save
+            .map(|at| at.elapsed() >= Self::CONFIG_SAVE_DEBOUNCE)
+            .unwrap_or(true);
+        if !due {
+            return Ok(());
+        }
+        self.save_config_now()
+    }
+
+    /// Persists the configuration immediately, bypassing the debounce.
+    ///
+    /// No-op unless the config is dirty. Failures leave the dirty flag set.
+    fn save_config_now(&mut self) -> Result<(), String> {
+        if !self.config_dirty {
+            return Ok(());
+        }
         if let Some(path) = self.config_path.clone() {
             self.config
                 .save(&path)
                 .map_err(|e| format!("Failed to persist configuration: {e}"))?;
         }
+        self.last_save = Some(Instant::now());
+        self.config_dirty = false;
         Ok(())
     }
 
@@ -577,6 +633,13 @@ impl Runtime {
     /// Shutdown the runtime gracefully.
     pub fn shutdown(&mut self) {
         info!("PresenceHub runtime shutting down");
+
+        // 0. Flush any debounced configuration writes so toggles made
+        // shortly before exit are still persisted. Best-effort: shutdown
+        // always proceeds.
+        if let Err(e) = self.save_config_now() {
+            warn!(error = %e, "Failed to persist configuration on shutdown");
+        }
 
         // 1. Stop polling
         self.running.store(false, Ordering::SeqCst);
@@ -1655,5 +1718,64 @@ mod tests {
         runtime.set_paused(true);
         runtime.set_paused(true);
         assert!(runtime.is_paused());
+    }
+
+    fn temp_config_path(tag: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "presencehub_toggle_test_{tag}_{}.toml",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn config_writes_are_debounced_and_flushed_by_poll() {
+        let path = temp_config_path("debounce");
+        let mut runtime = Runtime::new();
+        runtime.set_config_path(Some(path.clone()));
+
+        // First toggle writes immediately (no previous write to debounce).
+        runtime.set_plugin_enabled("FL Studio", false).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("flstudio = false"));
+
+        // A rapid second toggle applies in memory but defers the write.
+        runtime.set_plugin_enabled("FL Studio", true).unwrap();
+        assert!(runtime.config.plugins.flstudio);
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("flstudio = false"),
+            "rapid toggle must not rewrite the file immediately"
+        );
+
+        // Once the debounce interval elapses, the poll loop flushes it.
+        runtime.last_save = Some(Instant::now() - Duration::from_secs(3));
+        runtime.poll_once();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("flstudio = true"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn shutdown_flushes_debounced_config() {
+        let path = temp_config_path("shutdown");
+        let mut runtime = Runtime::new();
+        runtime.set_config_path(Some(path.clone()));
+
+        runtime.set_plugin_enabled("FL Studio", false).unwrap();
+        runtime.set_plugin_enabled("FL Studio", true).unwrap();
+
+        // The last toggle is still debounced (not yet on disk)...
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("flstudio = false"));
+
+        // ...but shutdown flushes it.
+        runtime.shutdown();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("flstudio = true"));
+
+        let _ = std::fs::remove_file(&path);
     }
 }
