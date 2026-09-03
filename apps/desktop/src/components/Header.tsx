@@ -1,7 +1,6 @@
 import type { LiveState } from "../types";
 import { StatusDot, globalStatus } from "./widgets";
-import { minimizeWindow, closeWindow } from "../api";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { dragWindow, minimizeWindow, closeWindow } from "../api";
 
 interface HeaderProps {
   state: LiveState;
@@ -23,11 +22,7 @@ export default function Header({
   const handleMouseDown = (e: React.MouseEvent) => {
     // Only drag on left click and when not clicking a button or interactive child
     if (e.button === 0 && (e.target as HTMLElement).closest("button") === null) {
-      try {
-        void getCurrentWindow().startDragging();
-      } catch {
-        // Handled by data-tauri-drag-region
-      }
+      void dragWindow();
     }
   };
 

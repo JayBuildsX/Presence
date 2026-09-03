@@ -137,6 +137,9 @@ impl Plugin for AntigravityPlugin {
     }
 
     fn init(&mut self) -> Result<(), PluginError> {
+        self.last_activity = None;
+        self.session_start_time = None;
+        self.current_conversation_id = None;
         Ok(())
     }
 
@@ -188,7 +191,16 @@ impl Plugin for AntigravityPlugin {
     }
 
     fn shutdown(&mut self) -> Result<(), PluginError> {
+        self.last_activity = None;
+        self.session_start_time = None;
+        self.current_conversation_id = None;
         Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.last_activity = None;
+        self.session_start_time = None;
+        self.current_conversation_id = None;
     }
 }
 

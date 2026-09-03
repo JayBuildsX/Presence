@@ -28,7 +28,6 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  pointer-events: none;
   user-select: none;
   flex-shrink: 0;
 }
@@ -544,18 +543,6 @@
 }
 
 /* Window Controls & Drag Region */
-
-[data-tauri-drag-region] {
-  -webkit-app-region: drag;
-}
-
-button,
-input,
-select,
-.toggle-switch,
-.plugin-card {
-  -webkit-app-region: no-drag;
-}
 
 .icon-button {
   width: 28px;

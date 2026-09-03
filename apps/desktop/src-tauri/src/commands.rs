@@ -54,8 +54,15 @@ pub async fn minimize_window(window: tauri::Window) -> Result<(), String> {
     window.minimize().map_err(|e| e.to_string())
 }
 
+/// Starts dragging the application window.
+#[tauri::command]
+pub async fn drag_window(window: tauri::Window) -> Result<(), String> {
+    window.start_dragging().map_err(|e| e.to_string())
+}
+
 /// Closes or hides the application window.
 #[tauri::command]
 pub async fn close_window(window: tauri::Window) -> Result<(), String> {
     window.close().map_err(|e| e.to_string())
 }
+

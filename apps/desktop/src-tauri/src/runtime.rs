@@ -667,6 +667,7 @@ mod tests {
         }
 
         fn init(&mut self) -> Result<(), PluginError> {
+            self.emitted = false;
             Ok(())
         }
 
@@ -687,7 +688,12 @@ mod tests {
         }
 
         fn shutdown(&mut self) -> Result<(), PluginError> {
+            self.emitted = false;
             Ok(())
+        }
+
+        fn reset(&mut self) {
+            self.emitted = false;
         }
     }
 
@@ -1606,6 +1612,12 @@ mod tests {
         assert!(runtime.set_plugin_enabled("FL Studio", true).is_ok());
         assert!(runtime.is_plugin_enabled("FL Studio"));
         assert!(runtime.config.plugins.flstudio);
+
+        runtime.poll_once();
+        assert!(
+            runtime.engine.current_activity().is_some(),
+            "re-enabling a plugin must detect and publish its activity on the next poll"
+        );
     }
 
     #[test]

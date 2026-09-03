@@ -359,6 +359,8 @@ impl Plugin for FlStudioPlugin {
     }
 
     fn init(&mut self) -> Result<(), PluginError> {
+        self.last_activity = None;
+        self.session_start_time = None;
         Ok(())
     }
 
@@ -376,7 +378,14 @@ impl Plugin for FlStudioPlugin {
     }
 
     fn shutdown(&mut self) -> Result<(), PluginError> {
+        self.last_activity = None;
+        self.session_start_time = None;
         Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.last_activity = None;
+        self.session_start_time = None;
     }
 }
 

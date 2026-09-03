@@ -93,6 +93,7 @@ pub fn run() {
             commands::set_paused,
             commands::set_poll_interval,
             commands::minimize_window,
+            commands::drag_window,
             commands::close_window,
         ])
         .setup(|app| {

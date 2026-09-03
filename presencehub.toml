@@ -2,12 +2,12 @@ config_version = 1
 log_level = "info"
 
 [runtime]
-poll_interval_ms = 500
+poll_interval_ms = 1000
 
 [plugins]
 flstudio = true
 antigravity = true
-opencode = false
+opencode = true
 
 [outputs]
 console = true
@@ -15,9 +15,9 @@ discord = true
 discord_app_id = 1533559059125637311
 
 [outputs.discord_apps]
+Antigravity = 1543009205785591868
 "FL Studio" = 1192880494086455357
 OpenCode = 1273940066603106328
-Antigravity = 1543009205785591868
 
 [presence]
 ownership = "Foreground"

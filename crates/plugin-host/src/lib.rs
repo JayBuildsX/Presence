@@ -198,6 +198,16 @@ pub trait Plugin: Send + Sync {
     /// Returns [`PluginError::ShutdownFailed`] if shutdown fails.
     /// The host will collect the error and continue with other plugins.
     fn shutdown(&mut self) -> Result<(), PluginError>;
+
+    /// Resets the plugin's cached state and change detection.
+    ///
+    /// The default implementation calls [`shutdown`](Plugin::shutdown) followed by
+    /// [`init`](Plugin::init). Plugins can override this to clear cached
+    /// activities so the next poll immediately re-emits application state.
+    fn reset(&mut self) {
+        let _ = self.shutdown();
+        let _ = self.init();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -318,7 +328,7 @@ impl PluginHost {
                 .iter_mut()
                 .find(|p| p.metadata().name == source)
             {
-                let _ = plugin.init();
+                plugin.reset();
             }
         }
     }

@@ -194,6 +194,9 @@ impl Plugin for OpenCodePlugin {
     }
 
     fn init(&mut self) -> Result<(), PluginError> {
+        self.last_activity = None;
+        self.current_file = None;
+        self.viewed_files.clear();
         Ok(())
     }
 
@@ -218,7 +221,16 @@ impl Plugin for OpenCodePlugin {
     }
 
     fn shutdown(&mut self) -> Result<(), PluginError> {
+        self.last_activity = None;
+        self.current_file = None;
+        self.viewed_files.clear();
         Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.last_activity = None;
+        self.current_file = None;
+        self.viewed_files.clear();
     }
 }
 

@@ -24,7 +24,12 @@ export async function minimizeWindow(): Promise<void> {
   return invoke<void>("minimize_window");
 }
 
+export async function dragWindow(): Promise<void> {
+  return invoke<void>("drag_window");
+}
+
 export async function closeWindow(): Promise<void> {
   return invoke<void>("close_window");
 }
+
 
