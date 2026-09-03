@@ -144,3 +144,36 @@ pub async fn set_autostart(enabled: bool) -> Result<bool, String> {
     }
     get_autostart_status().await
 }
+
+/// Rebinds a global shortcut dynamically.
+#[tauri::command]
+pub async fn register_custom_shortcut(
+    app: tauri::AppHandle,
+    action: String,
+    old_shortcut: Option<String>,
+    new_shortcut: String,
+) -> Result<(), String> {
+    use crate::state::ShortcutMap;
+    use tauri::Manager;
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+
+    let map = app.state::<ShortcutMap>();
+    if let Some(old) = old_shortcut {
+        if let Ok(sc) = old.parse::<Shortcut>() {
+            let _ = app.global_shortcut().unregister(sc.clone());
+            if let Ok(mut lock) = map.0.write() {
+                lock.remove(&sc);
+            }
+        }
+    }
+    let sc = new_shortcut
+        .parse::<Shortcut>()
+        .map_err(|e| format!("Invalid shortcut: {e}"))?;
+    app.global_shortcut()
+        .register(sc.clone())
+        .map_err(|e| format!("Failed to register shortcut: {e}"))?;
+    if let Ok(mut lock) = map.0.write() {
+        lock.insert(sc, action);
+    }
+    Ok(())
+}

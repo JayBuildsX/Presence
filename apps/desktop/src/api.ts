@@ -52,6 +52,14 @@ export async function setAutostart(enabled: boolean): Promise<boolean> {
   return invoke<boolean>("set_autostart", { enabled });
 }
 
-
-
-
+export async function registerCustomShortcut(
+  action: string,
+  oldShortcut: string | null,
+  newShortcut: string,
+): Promise<void> {
+  return invoke<void>("register_custom_shortcut", {
+    action,
+    oldShortcut,
+    newShortcut,
+  });
+}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import {
   getState,
@@ -13,88 +14,191 @@ import CurrentPresence from "./components/CurrentPresence";
 import Header from "./components/Header";
 import PluginList from "./components/PluginList";
 import Settings from "./components/Settings";
+import Toast, { type ToastMessage } from "./components/Toast";
 
-const REFRESH_INTERVAL_MS = 1000;
-
-function App() {
+export default function App() {
   const [state, setState] = useState<LiveState | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
-  // Name of the plugin with an in-flight toggle, "pause", or "interval".
   const [pending, setPending] = useState<string | null>(null);
-  const mounted = useRef(true);
+  const [activeOperations, setActiveOperations] = useState<Set<string>>(new Set());
+  const [showSettings, setShowSettings] = useState(false);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
 
-  const refresh = useCallback(async () => {
+  const handleDismissToast = useCallback(() => {
+    setToast(null);
+  }, []);
+
+  const showToast = useCallback(
+    (text: string, type: "info" | "success" | "warning" = "info") => {
+      setToast({ id: Date.now(), text, type });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const unlisten = listen<{ text: string; type?: "info" | "success" | "warning" }>(
+      "toast",
+      (event) => {
+        showToast(event.payload.text, event.payload.type);
+      },
+    );
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [showToast]);
+
+  const refreshState = useCallback(async () => {
     try {
       const next = await getState();
-      if (mounted.current) {
-        setState(next);
-      }
+      setState(next);
+      setError(null);
     } catch (e) {
-      if (mounted.current) {
-        setError(`Could not reach backend: ${String(e)}`);
-      }
+      setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
+  const pollIntervalRef = useRef<number>(1000);
   useEffect(() => {
-    mounted.current = true;
-    void refresh();
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, REFRESH_INTERVAL_MS);
-    return () => {
-      mounted.current = false;
-      window.clearInterval(timer);
-    };
-  }, [refresh]);
+    if (state?.poll_interval_ms) {
+      pollIntervalRef.current = state.poll_interval_ms;
+    }
+  }, [state?.poll_interval_ms]);
 
-  async function runCommand<T>(key: string, command: () => Promise<T>) {
-    setPending(key);
-    setError(null);
+  useEffect(() => {
+    void refreshState();
+    let timer: ReturnType<typeof setTimeout>;
+    const scheduleNext = () => {
+      timer = setTimeout(() => {
+        void refreshState().finally(scheduleNext);
+      }, pollIntervalRef.current);
+    };
+    scheduleNext();
+    return () => clearTimeout(timer);
+  }, [refreshState]);
+
+  const debouncedTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
+
+  const scheduleDebouncedAction = useCallback(
+    (
+      key: string,
+      actionFn: () => Promise<LiveState | void>,
+      delayMs = 180,
+    ) => {
+      setActiveOperations((prev) => new Set(prev).add(key));
+
+      const existingTimer = debouncedTimersRef.current.get(key);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+      }
+
+      const timer = setTimeout(async () => {
+        debouncedTimersRef.current.delete(key);
+        try {
+          const next = await actionFn();
+          if (next) {
+            setState(next);
+          } else {
+            await refreshState();
+          }
+          setError(null);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+        } finally {
+          setActiveOperations((prev) => {
+            const nextSet = new Set(prev);
+            nextSet.delete(key);
+            return nextSet;
+          });
+        }
+      }, delayMs);
+
+      debouncedTimersRef.current.set(key, timer);
+    },
+    [refreshState],
+  );
+
+  async function runCommand(
+    name: string,
+    action: () => Promise<LiveState | void>,
+  ) {
+    setPending(name);
     try {
-      const next = (await command()) as unknown as LiveState;
-      if (mounted.current) {
+      const next = await action();
+      if (next) {
         setState(next);
+      } else {
+        await refreshState();
       }
+      setError(null);
     } catch (e) {
-      // Never leave the UI disagreeing with the backend: show the error
-      // and reload the authoritative state.
-      if (mounted.current) {
-        setError(String(e));
-      }
-      await refresh();
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
-      if (mounted.current) {
-        setPending(null);
-      }
+      setPending(null);
     }
   }
 
   function handleTogglePlugin(name: string, enabled: boolean) {
-    void runCommand(name, () => setPluginEnabled(name, enabled));
+    setState((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        plugins: prev.plugins.map((p) =>
+          p.name === name ? { ...p, enabled } : p,
+        ),
+      };
+    });
+    showToast(enabled ? `${name} enabled` : `${name} disabled`, "info");
+    scheduleDebouncedAction(`plugin:${name}`, () =>
+      setPluginEnabled(name, enabled),
+    );
   }
 
   function handleTogglePause() {
-    if (!state) {
-      return;
-    }
-    void runCommand("pause", () => setPaused(!state.paused));
+    if (!state) return;
+    const nextPause = !state.paused;
+    setState((prev) => (prev ? { ...prev, paused: nextPause } : null));
+    showToast(nextPause ? "Broadcasting paused" : "Broadcasting resumed", "info");
+    scheduleDebouncedAction("pause", () => setPaused(nextPause));
   }
 
   function handleSelectInterval(intervalMs: number) {
-    void runCommand("interval", () => setPollInterval(intervalMs));
+    setState((prev) => (prev ? { ...prev, poll_interval_ms: intervalMs } : null));
+    scheduleDebouncedAction("interval", () => setPollInterval(intervalMs), 50);
   }
 
   function handleReconnectDiscord() {
-    void runCommand("reconnect", () => reconnectDiscord());
+    setActiveOperations((prev) => new Set(prev).add("reconnect"));
+    void runCommand("reconnect", async () => {
+      const res = await reconnectDiscord();
+      if (res.discord_connected) {
+        showToast("Discord reconnected successfully", "success");
+      } else {
+        showToast("Could not connect to Discord pipe", "warning");
+      }
+      return res;
+    }).finally(() => {
+      setActiveOperations((prev) => {
+        const nextSet = new Set(prev);
+        nextSet.delete("reconnect");
+        return nextSet;
+      });
+    });
   }
 
   function handleTogglePriority(name: string) {
     if (!state) return;
     const nextPriority = state.pinned_source === name ? null : name;
-    void runCommand("priority", () => setPinnedSource(nextPriority));
+    setState((prev) => (prev ? { ...prev, pinned_source: nextPriority } : null));
+    showToast(
+      nextPriority ? `★ Prioritized ${name}` : `Priority removed from ${name}`,
+      "success",
+    );
+    scheduleDebouncedAction("priority", () => setPinnedSource(nextPriority));
   }
+
+  const isSyncing = activeOperations.size > 0;
 
   return (
     <div className="app">
@@ -115,6 +219,7 @@ function App() {
         onTogglePause={handleTogglePause}
         onToggleSettings={() => setShowSettings(!showSettings)}
         onReconnectDiscord={handleReconnectDiscord}
+        isSyncing={isSyncing}
       />
       {error && (
         <div className="error-bar" role="alert">
@@ -128,7 +233,6 @@ function App() {
           <CurrentPresence state={state} />
           <PluginList
             state={state}
-            pending={pending}
             onToggle={handleTogglePlugin}
             onTogglePriority={handleTogglePriority}
           />
@@ -137,12 +241,12 @@ function App() {
               state={state}
               pending={pending}
               onSelectInterval={handleSelectInterval}
+              onToast={showToast}
             />
           )}
         </>
       )}
+      <Toast toast={toast} onDismiss={handleDismissToast} />
     </div>
   );
 }
-
-export default App;

@@ -9,6 +9,7 @@ interface HeaderProps {
   onTogglePause: () => void;
   onToggleSettings: () => void;
   onReconnectDiscord?: () => void;
+  isSyncing?: boolean;
 }
 
 export default function Header({
@@ -18,6 +19,7 @@ export default function Header({
   onTogglePause,
   onToggleSettings,
   onReconnectDiscord,
+  isSyncing,
 }: HeaderProps) {
   const status = globalStatus(state);
 
@@ -51,6 +53,13 @@ export default function Header({
       </div>
 
       <div className="header-actions">
+        {isSyncing && (
+          <div className="sync-badge" title="Syncing changes with Discord...">
+            <span className="sync-spinner" aria-hidden="true" />
+            <span>Syncing</span>
+          </div>
+        )}
+
         <div
           className={`status-badge ${status.dot}-badge ${!state.discord_connected && onReconnectDiscord ? "is-clickable" : ""}`}
           onClick={!state.discord_connected ? onReconnectDiscord : undefined}
@@ -88,7 +97,6 @@ export default function Header({
         <button
           type="button"
           className={`action-button ${state.paused ? "is-paused" : ""}`}
-          disabled={busy}
           onClick={onTogglePause}
           aria-pressed={state.paused}
           title={state.paused ? "Resume Activity" : "Pause Activity"}

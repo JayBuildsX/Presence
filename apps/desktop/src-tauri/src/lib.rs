@@ -12,10 +12,11 @@ mod state;
 use presencehub_core::Config;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tracing::{info, warn};
 
-use state::AppState;
+use state::{AppState, ShortcutMap};
 
 /// File name of the desktop configuration file.
 const CONFIG_FILE_NAME: &str = "presencehub.toml";
@@ -38,55 +39,41 @@ pub fn run() {
     // the executable directly (e.g. double-clicking it) produces the same
     // diagnostics as a terminal launch with `RUST_LOG=info`, without
     // requiring the environment variable.
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
-    info!("PresenceHub starting");
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    // Load configuration (default if file missing or invalid)
-    let config = match resolve_config_path() {
+    // 1. Locate config file (executable-adjacent or ancestor-adjacent).
+    let config_path = resolve_config_path();
+    let config = match &config_path {
         Some(path) => {
-            info!(config_path = %path.display(), "Loading configuration file");
-            match Config::load(&path) {
-                Ok(config) => config,
-                Err(error) => {
-                    warn!(config_path = %path.display(), error = %error, "Invalid configuration; using defaults");
-                    Config::default()
-                }
-            }
+            info!(path = %path.display(), "Loading configuration");
+            Config::load(path).unwrap_or_else(|e| {
+                warn!(error = %e, "Invalid configuration file, falling back to defaults");
+                Config::default()
+            })
         }
         None => {
-            info!("No configuration file found; using defaults");
+            info!("No configuration file found, using defaults");
             Config::default()
         }
     };
-    info!(
-        poll_interval_ms = config.runtime.poll_interval_ms,
-        flstudio = config.plugins.flstudio,
-        antigravity = config.plugins.antigravity,
-        opencode = config.plugins.opencode,
-        console = config.outputs.console,
-        discord = config.outputs.discord,
-        discord_app_id = config.outputs.discord_app_id,
-        discord_apps = ?config.outputs.discord_apps,
-        "Configuration loaded"
-    );
 
-    // Create and configure the runtime
+    // 2. Start the runtime with loaded config.
     let mut runtime = runtime::Runtime::with_config(config);
-    runtime.set_config_path(resolve_config_path());
-
-    // Start the runtime
+    runtime.set_config_path(config_path);
     if let Err(e) = runtime.start() {
-        eprintln!("Failed to start PresenceHub runtime: {}", e);
+        warn!(error = %e, "Failed to start runtime during initialization");
     }
 
     let state = AppState {
         runtime: Arc::new(tokio::sync::Mutex::new(runtime)),
     };
 
+    // 3. Build and launch Tauri application.
     tauri::Builder::default()
         .manage(state)
+        .manage(ShortcutMap::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
             commands::set_plugin_enabled,
@@ -100,6 +87,7 @@ pub fn run() {
             commands::set_pinned_source,
             commands::get_autostart_status,
             commands::set_autostart,
+            commands::register_custom_shortcut,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -155,9 +143,9 @@ pub fn run() {
                 .cloned()
                 .expect("default window icon");
 
-            tauri::tray::TrayIconBuilder::new()
+            let _tray = tauri::tray::TrayIconBuilder::with_id("main")
                 .icon(icon)
-                .tooltip("PresenceHub - Discord Rich Presence")
+                .tooltip("PresenceHub - Starting...")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -210,19 +198,125 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // Setup Global Shortcuts
+            let shortcut_map = app.state::<ShortcutMap>().inner().clone();
+            let pause_shortcut: Shortcut = "CommandOrControl+Shift+P".parse().unwrap();
+            let reconnect_shortcut: Shortcut = "CommandOrControl+Shift+D".parse().unwrap();
+            let toggle_win_shortcut: Shortcut = "CommandOrControl+Shift+H".parse().unwrap();
+
+            if let Ok(mut lock) = shortcut_map.0.write() {
+                lock.insert(pause_shortcut.clone(), "pause".to_string());
+                lock.insert(reconnect_shortcut.clone(), "reconnect".to_string());
+                lock.insert(toggle_win_shortcut.clone(), "toggle_window".to_string());
+            }
+
+            let app_handle_for_shortcuts = app.handle().clone();
+            let state_for_shortcuts = app.state::<AppState>().inner().clone();
+            let map_for_handler = shortcut_map.clone();
+
+            let shortcut_plugin = tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |_app, shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        let action = map_for_handler
+                            .0
+                            .read()
+                            .ok()
+                            .and_then(|m| m.get(shortcut).cloned());
+                        if let Some(action) = action {
+                            match action.as_str() {
+                                "pause" => {
+                                    let state = state_for_shortcuts.clone();
+                                    let app_handle = app_handle_for_shortcuts.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        let mut runtime = state.runtime.lock().await;
+                                        let paused = runtime.is_paused();
+                                        let next = !paused;
+                                        runtime.set_paused(next);
+                                        let _ = app_handle.emit(
+                                            "toast",
+                                            serde_json::json!({
+                                                "text": if next { "Broadcasting paused" } else { "Broadcasting resumed" },
+                                                "type": "info"
+                                            }),
+                                        );
+                                    });
+                                }
+                                "reconnect" => {
+                                    let state = state_for_shortcuts.clone();
+                                    let app_handle = app_handle_for_shortcuts.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        let mut runtime = state.runtime.lock().await;
+                                        let ok = runtime.reconnect_discord().unwrap_or(false);
+                                        let _ = app_handle.emit(
+                                            "toast",
+                                            serde_json::json!({
+                                                "text": if ok { "Discord reconnected successfully" } else { "Could not connect to Discord pipe" },
+                                                "type": if ok { "success" } else { "warning" }
+                                            }),
+                                        );
+                                    });
+                                }
+                                "toggle_window" => {
+                                    if let Some(window) =
+                                        app_handle_for_shortcuts.get_webview_window("main")
+                                    {
+                                        let is_visible = window.is_visible().unwrap_or(false);
+                                        if is_visible {
+                                            let _ = window.hide();
+                                        } else {
+                                            let _ = window.show();
+                                            let _ = window.unminimize();
+                                            let _ = window.set_focus();
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                })
+                .build();
+
+            app.handle().plugin(shortcut_plugin)?;
+            let _ = app.global_shortcut().register(pause_shortcut);
+            let _ = app.global_shortcut().register(reconnect_shortcut);
+            let _ = app.global_shortcut().register(toggle_win_shortcut);
+
             // Drive polling on a background task; each iteration locks the
             // runtime briefly so GUI commands interleave between polls.
             let state = app.state::<AppState>().inner().clone();
+            let app_handle_tray = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 loop {
-                    let interval = {
+                    let (interval, tooltip) = {
                         let mut runtime = state.runtime.lock().await;
                         if !runtime.is_running() {
                             break;
                         }
                         runtime.poll_once();
-                        runtime.poll_interval()
+                        let snapshot = runtime.snapshot();
+                        let tooltip = if snapshot.paused {
+                            "PresenceHub: Paused".to_string()
+                        } else if !snapshot.discord_connected {
+                            "PresenceHub: Discord Disconnected".to_string()
+                        } else if let Some(ref current) = snapshot.current {
+                            let mut text =
+                                format!("PresenceHub: {} — {}", current.source, current.state);
+                            if text.len() > 60 {
+                                text.truncate(57);
+                                text.push_str("...");
+                            }
+                            text
+                        } else {
+                            "PresenceHub: Watching (Idle)".to_string()
+                        };
+                        (runtime.poll_interval(), tooltip)
                     };
+
+                    if let Some(tray) = app_handle_tray.tray_by_id("main") {
+                        let _ = tray.set_tooltip(Some(tooltip));
+                    }
+
                     tokio::time::sleep(interval).await;
                 }
             });

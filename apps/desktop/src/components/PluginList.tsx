@@ -3,7 +3,6 @@ import { PluginIcon, StatusDot, pluginStatusText } from "./widgets";
 
 interface PluginListProps {
   state: LiveState;
-  pending: string | null;
   onToggle: (name: string, enabled: boolean) => void;
   onTogglePriority?: (name: string) => void;
 }
@@ -17,7 +16,6 @@ function statusDot(plugin: PluginView): string {
 
 export default function PluginList({
   state,
-  pending,
   onToggle,
   onTogglePriority,
 }: PluginListProps) {
@@ -40,7 +38,6 @@ export default function PluginList({
           ]
             .filter(Boolean)
             .join(" ");
-          const busy = pending !== null;
 
           return (
             <div className={cardClass} key={plugin.name}>
@@ -63,7 +60,6 @@ export default function PluginList({
                   <button
                     type="button"
                     className={`priority-btn ${isPrioritized ? "is-prioritized" : ""}`}
-                    disabled={busy}
                     onClick={() => onTogglePriority(plugin.name)}
                     title={
                       isPrioritized
@@ -92,7 +88,6 @@ export default function PluginList({
                   aria-checked={plugin.enabled}
                   aria-label={`${plugin.enabled ? "Disable" : "Enable"} ${plugin.name}`}
                   className="toggle-switch"
-                  disabled={busy}
                   onClick={() => onToggle(plugin.name, !plugin.enabled)}
                 >
                   <span className="toggle-slider" />

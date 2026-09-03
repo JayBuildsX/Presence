@@ -25,6 +25,7 @@ presencehub-opencode.path = "../../../plugins/opencode"
 presencehub-discord-output.path = "../../../crates/discord-output"
 ctrlc.workspace = true
 winapi = { version = "0.3", features = ["winuser", "errhandlingapi", "processthreadsapi", "handleapi", "winnt", "winbase", "minwindef"] }
+tauri-plugin-global-shortcut = "2"
 
 [features]
 default = ["custom-protocol"]

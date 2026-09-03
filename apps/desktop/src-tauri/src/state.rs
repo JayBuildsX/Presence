@@ -8,7 +8,9 @@
 //! any of this itself.
 
 use serde::Serialize;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use tauri_plugin_global_shortcut::Shortcut;
 
 /// Shared GUI state: the runtime behind an async mutex.
 ///
@@ -18,6 +20,10 @@ use std::sync::Arc;
 pub struct AppState {
     pub runtime: Arc<tokio::sync::Mutex<crate::runtime::Runtime>>,
 }
+
+/// Shared action mapping for dynamically registered global shortcuts.
+#[derive(Clone, Default)]
+pub struct ShortcutMap(pub Arc<RwLock<HashMap<Shortcut, String>>>);
 
 /// Per-plugin row in the GUI.
 #[derive(Debug, Clone, Serialize)]
