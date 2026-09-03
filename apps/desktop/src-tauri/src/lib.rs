@@ -95,8 +95,111 @@ pub fn run() {
             commands::minimize_window,
             commands::drag_window,
             commands::close_window,
+            commands::reconnect_discord,
+            commands::quit_app,
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Prevent real termination; hide to Windows system tray instead.
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .setup(|app| {
+            // Setup System Tray
+            let show_item = tauri::menu::MenuItem::with_id(
+                app,
+                "show",
+                "Open PresenceHub",
+                true,
+                None::<&str>,
+            )?;
+            let toggle_pause_item = tauri::menu::MenuItem::with_id(
+                app,
+                "toggle_pause",
+                "Pause / Resume",
+                true,
+                None::<&str>,
+            )?;
+            let reconnect_item = tauri::menu::MenuItem::with_id(
+                app,
+                "reconnect",
+                "Reconnect Discord",
+                true,
+                None::<&str>,
+            )?;
+            let quit_item = tauri::menu::MenuItem::with_id(
+                app,
+                "quit",
+                "Quit PresenceHub",
+                true,
+                None::<&str>,
+            )?;
+            let menu = tauri::menu::Menu::with_items(
+                app,
+                &[&show_item, &toggle_pause_item, &reconnect_item, &quit_item],
+            )?;
+
+            let icon = app
+                .default_window_icon()
+                .cloned()
+                .expect("default window icon");
+
+            tauri::tray::TrayIconBuilder::new()
+                .icon(icon)
+                .tooltip("PresenceHub - Discord Rich Presence")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "toggle_pause" => {
+                        let state = app.state::<AppState>().inner().clone();
+                        tauri::async_runtime::spawn(async move {
+                            let mut runtime = state.runtime.lock().await;
+                            let paused = runtime.is_paused();
+                            runtime.set_paused(!paused);
+                        });
+                    }
+                    "reconnect" => {
+                        let state = app.state::<AppState>().inner().clone();
+                        tauri::async_runtime::spawn(async move {
+                            let mut runtime = state.runtime.lock().await;
+                            let _ = runtime.reconnect_discord();
+                        });
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let is_visible = window.is_visible().unwrap_or(false);
+                            if is_visible {
+                                let _ = window.hide();
+                            } else {
+                                let _ = window.show();
+                                let _ = window.unminimize();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    }
+                })
+                .build(app)?;
+
             // Drive polling on a background task; each iteration locks the
             // runtime briefly so GUI commands interleave between polls.
             let state = app.state::<AppState>().inner().clone();

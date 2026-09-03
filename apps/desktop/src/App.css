@@ -106,6 +106,60 @@
   color: #f98487;
 }
 
+.status-badge.is-clickable {
+  cursor: pointer;
+  transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+
+.status-badge.is-clickable:hover {
+  border-color: rgba(242, 63, 67, 0.5);
+  opacity: 0.9;
+}
+
+.reconnect-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: #f98487;
+  background: rgba(242, 63, 67, 0.1);
+  border: 1px solid rgba(242, 63, 67, 0.3);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  height: 22px;
+  box-sizing: border-box;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.reconnect-button:hover:not(:disabled) {
+  background: rgba(242, 63, 67, 0.2);
+  border-color: rgba(242, 63, 67, 0.5);
+  color: #ff9da0;
+}
+
+.reconnect-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.is-spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .action-button {
   display: inline-flex;
   align-items: center;

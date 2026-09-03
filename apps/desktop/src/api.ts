@@ -32,4 +32,13 @@ export async function closeWindow(): Promise<void> {
   return invoke<void>("close_window");
 }
 
+export async function reconnectDiscord(): Promise<LiveState> {
+  return invoke<LiveState>("reconnect_discord");
+}
+
+export async function quitApp(): Promise<void> {
+  return invoke<void>("quit_app");
+}
+
+
 

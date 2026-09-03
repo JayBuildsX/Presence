@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
-import { getState, setPaused, setPluginEnabled, setPollInterval } from "./api";
+import {
+  getState,
+  reconnectDiscord,
+  setPaused,
+  setPluginEnabled,
+  setPollInterval,
+} from "./api";
 import type { LiveState } from "./types";
 import CurrentPresence from "./components/CurrentPresence";
 import Header from "./components/Header";
@@ -79,6 +85,10 @@ function App() {
     void runCommand("interval", () => setPollInterval(intervalMs));
   }
 
+  function handleReconnectDiscord() {
+    void runCommand("reconnect", () => reconnectDiscord());
+  }
+
   return (
     <div className="app">
       <Header
@@ -96,6 +106,7 @@ function App() {
         showSettings={showSettings}
         onTogglePause={handleTogglePause}
         onToggleSettings={() => setShowSettings(!showSettings)}
+        onReconnectDiscord={handleReconnectDiscord}
       />
       {error && (
         <div className="error-bar" role="alert">

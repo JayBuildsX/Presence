@@ -9,8 +9,18 @@
 //!
 //! FL Studio is found by process name (`FL64.exe` / `FL.exe`): all PIDs
 //! owned by those processes are collected, then top-level windows are
-//! enumerated and the first visible window belonging to one of those PIDs
-//! with a non-empty title wins. No window class matching is involved.
+//! enumerated. The main title is the first visible window naming FL
+//! Studio (falling back to the first titled window), matching
+//! `zfi2/FL-Studio-Discord-RPC`.
+//!
+//! # Render Detection
+//!
+//! A visible FL Studio window that mentions a render without naming
+//! FL Studio itself (e.g. the export progress dialog) marks the session
+//! as rendering, in which case the presence state becomes
+//! `"Rendering <project>"` instead of the project name. A project file
+//! merely named like a render (e.g. `rendering.flp`) never triggers this
+//! through its main title, since that title always names FL Studio.
 //!
 //! # Title Parsing
 //!
@@ -153,8 +163,8 @@ mod windows {
     thread_local! {
         /// PIDs owned by the FL Studio processes for the current lookup.
         static TARGET_PIDS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
-        /// First matching window title found during enumeration.
-        static FOUND_TITLE: RefCell<Option<String>> = const { RefCell::new(None) };
+        /// Every matching window title found during enumeration, in order.
+        static FOUND_TITLES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 
     /// Collect the PIDs of all running FL Studio processes.
@@ -194,12 +204,9 @@ mod windows {
         pids
     }
 
-    /// Callback for EnumWindows. Takes the first visible window owned by one
-    /// of the FL Studio PIDs whose title is non-empty, then stops.
+    /// Callback for EnumWindows. Collects every visible window owned by one
+    /// of the FL Studio PIDs whose title is non-empty.
     unsafe extern "system" fn enum_callback(hwnd: HWND, _lparam: LPARAM) -> BOOL {
-        if FOUND_TITLE.with(|found| found.borrow().is_some()) {
-            return FALSE; // already have a title, stop
-        }
         if IsWindowVisible(hwnd) == 0 {
             return TRUE; // skip, continue
         }
@@ -220,31 +227,78 @@ mod windows {
             return TRUE; // continue
         }
 
-        FOUND_TITLE.with(|found| *found.borrow_mut() = Some(title));
-        FALSE // stop enumeration
+        FOUND_TITLES.with(|found| found.borrow_mut().push(title));
+        TRUE // continue enumeration
     }
 
-    /// Find FL Studio's window title.
-    ///
-    /// Collects the PIDs of the `FL64.exe` / `FL.exe` processes, then takes
-    /// the first visible window owned by one of them with a non-empty title.
-    /// Returns `None` when FL Studio is not running or has no titled window.
-    pub fn find_flstudio_window_title() -> Option<String> {
+    /// All visible titled windows owned by the FL Studio processes, in
+    /// enumeration order. Empty when FL Studio is not running.
+    fn fl_window_titles() -> Vec<String> {
         unsafe {
             TARGET_PIDS.with(|targets| *targets.borrow_mut() = collect_fl_pids());
             if TARGET_PIDS.with(|targets| targets.borrow().is_empty()) {
-                return None;
+                return Vec::new();
             }
-            FOUND_TITLE.with(|found| *found.borrow_mut() = None);
+            FOUND_TITLES.with(|found| found.borrow_mut().clear());
             EnumWindows(Some(enum_callback), 0);
-            FOUND_TITLE.with(|found| found.borrow_mut().take())
+            FOUND_TITLES.with(|found| found.borrow_mut().drain(..).collect())
         }
+    }
+
+    /// Find FL Studio's main window title: the first titled window whose
+    /// title names FL Studio, falling back to the first titled window.
+    /// Returns `None` when FL Studio is not running or has no titled window.
+    pub fn find_flstudio_window_title() -> Option<String> {
+        let mut titles = fl_window_titles();
+        if titles.is_empty() {
+            return None;
+        }
+        if let Some(pos) = titles.iter().position(|t| t.contains("FL Studio")) {
+            return Some(titles.swap_remove(pos));
+        }
+        titles.into_iter().next()
+    }
+
+    /// Whether an FL Studio render/export dialog is currently visible.
+    ///
+    /// Matches any titled FL window satisfying [`is_render_dialog_title`].
+    pub fn is_render_dialog_open() -> bool {
+        fl_window_titles()
+            .iter()
+            .any(|title| super::is_render_dialog_title(title))
     }
 }
 
 /// Get the FL Studio window title, or None if not found.
 pub fn get_flstudio_title() -> Option<String> {
     windows::find_flstudio_window_title()
+}
+
+/// Whether a window title looks like an FL Studio render/export dialog.
+///
+/// Matches titles mentioning a render without naming FL Studio itself
+/// (e.g. the export progress dialog), so a project merely named like a
+/// render (e.g. `rendering.flp - FL Studio 21`) never false-positives
+/// through its main title.
+pub fn is_render_dialog_title(title: &str) -> bool {
+    title.to_lowercase().contains("render") && !title.contains("FL Studio")
+}
+
+/// The observed FL Studio window state for one poll.
+pub struct FlWindow {
+    /// Main window title (names FL Studio when available).
+    pub title: String,
+    /// Whether a render/export dialog is visible.
+    pub rendering: bool,
+}
+
+/// Get FL Studio's current window state, or None if not found.
+pub fn get_flstudio_state() -> Option<FlWindow> {
+    let title = get_flstudio_title()?;
+    Some(FlWindow {
+        title,
+        rendering: windows::is_render_dialog_open(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -302,10 +356,15 @@ impl FlStudioPlugin {
     /// Observe a window title and apply change detection.
     ///
     /// Builds a canonical Activity from the title and emits it only when
-    /// it differs from the last emitted activity. Split out of
+    /// it differs from the last emitted activity. `rendering` reports
+    /// whether an FL Studio render/export dialog is visible. Split out of
     /// [`Plugin::poll`] so the deduplication state machine can be tested
     /// without a live FL Studio window.
-    pub fn observe_title(&mut self, title: &str) -> Result<Option<Activity>, PluginError> {
+    pub fn observe_title(
+        &mut self,
+        title: &str,
+        rendering: bool,
+    ) -> Result<Option<Activity>, PluginError> {
         let parsed =
             parse_window_title(title).map_err(|e| PluginError::PollFailed(e.to_string()))?;
 
@@ -326,7 +385,7 @@ impl FlStudioPlugin {
                 }
             });
 
-        let activity = build_activity(&parsed, start_time);
+        let activity = build_activity(&parsed, start_time, rendering);
 
         // Only emit if the activity changed.
         if self.last_activity.as_ref() != Some(&activity) {
@@ -367,14 +426,14 @@ impl Plugin for FlStudioPlugin {
     fn poll(&mut self) -> Result<Option<Activity>, PluginError> {
         // Poll FL Studio and produce a canonical Activity.
         // Errors are mapped to PluginError::PollFailed.
-        let Some(title) = get_flstudio_title() else {
+        let Some(window) = get_flstudio_state() else {
             // FL Studio is not running. Forget the previous activity so the
             // next identical activity is published again after the
             // application reopens.
             return self.application_not_found();
         };
 
-        self.observe_title(&title)
+        self.observe_title(&window.title, window.rendering)
     }
 
     fn shutdown(&mut self) -> Result<(), PluginError> {
@@ -393,10 +452,12 @@ impl Plugin for FlStudioPlugin {
 ///
 /// Follows `zfi2/FL-Studio-Discord-RPC`:
 /// - `details`: "FL Studio <version>" (or "FL Studio" if version is unknown)
-/// - `state`: project name (e.g. "song.flp" or "song.flp*"), or "Empty project" when no project loaded
+/// - `state`: project name (e.g. "song.flp" or "song.flp*"), or "Empty project" when no project loaded.
+///   While a render/export dialog is visible (`rendering`), the state becomes
+///   "Rendering <project>" (or "Rendering..." with no project).
 /// - `timestamps`: persistent start timestamp when session started
 /// - `metadata`: "large_image" = "fl_studio_logo", "large_text" = details
-pub fn build_activity(parsed: &ParsedTitle, start_timestamp: i64) -> Activity {
+pub fn build_activity(parsed: &ParsedTitle, start_timestamp: i64, rendering: bool) -> Activity {
     let details = match &parsed.version {
         Some(version) => format!("FL Studio {}", version),
         None => "FL Studio".to_string(),
@@ -404,13 +465,23 @@ pub fn build_activity(parsed: &ParsedTitle, start_timestamp: i64) -> Activity {
 
     let state = match &parsed.project {
         Some(project) => {
+            let mut name = project.clone();
             if parsed.has_unsaved_changes {
-                format!("{}*", project)
+                name.push('*');
+            }
+            if rendering {
+                format!("Rendering {name}")
             } else {
-                project.clone()
+                name
             }
         }
-        None => "Empty project".to_string(),
+        None => {
+            if rendering {
+                "Rendering...".to_string()
+            } else {
+                "Empty project".to_string()
+            }
+        }
     };
 
     let mut metadata = HashMap::new();
@@ -554,7 +625,7 @@ mod tests {
             project: Some("my_song.flp".to_string()),
             has_unsaved_changes: false,
         };
-        let activity = build_activity(&parsed, 1700000000);
+        let activity = build_activity(&parsed, 1700000000, false);
         assert_eq!(activity.state, "my_song.flp");
         assert_eq!(activity.details, Some("FL Studio 20".to_string()));
         assert_eq!(activity.application.as_deref(), Some("FL Studio"));
@@ -578,7 +649,7 @@ mod tests {
             project: Some("my_song.flp".to_string()),
             has_unsaved_changes: true,
         };
-        let activity = build_activity(&parsed, 1700000000);
+        let activity = build_activity(&parsed, 1700000000, false);
         assert_eq!(activity.state, "my_song.flp*");
         assert_eq!(activity.details, Some("FL Studio 21".to_string()));
         assert_eq!(activity.metadata.get("version"), Some(&"21".to_string()));
@@ -592,7 +663,7 @@ mod tests {
             project: None,
             has_unsaved_changes: false,
         };
-        let activity = build_activity(&parsed, 1700000000);
+        let activity = build_activity(&parsed, 1700000000, false);
         assert_eq!(activity.state, "Empty project");
         assert_eq!(activity.details, Some("FL Studio 20".to_string()));
         assert_eq!(activity.application.as_deref(), Some("FL Studio"));
@@ -605,24 +676,93 @@ mod tests {
             project: Some("track.flp".to_string()),
             has_unsaved_changes: false,
         };
-        let activity = build_activity(&parsed, 1700000000);
+        let activity = build_activity(&parsed, 1700000000, false);
         assert_eq!(activity.state, "track.flp");
         assert_eq!(activity.details, Some("FL Studio 2025".to_string()));
         assert_eq!(activity.metadata.get("version"), Some(&"2025".to_string()));
     }
 
     #[test]
+    fn build_activity_rendering_with_project() {
+        let parsed = ParsedTitle {
+            version: Some("21".to_string()),
+            project: Some("song.flp".to_string()),
+            has_unsaved_changes: false,
+        };
+        let activity = build_activity(&parsed, 1700000000, true);
+        assert_eq!(activity.state, "Rendering song.flp");
+        assert_eq!(activity.details, Some("FL Studio 21".to_string()));
+        assert_eq!(
+            activity.metadata.get("large_image"),
+            Some(&"fl_studio_logo".to_string())
+        );
+    }
+
+    #[test]
+    fn build_activity_rendering_without_project() {
+        let parsed = ParsedTitle {
+            version: Some("21".to_string()),
+            project: None,
+            has_unsaved_changes: false,
+        };
+        let activity = build_activity(&parsed, 1700000000, true);
+        assert_eq!(activity.state, "Rendering...");
+        assert_eq!(activity.details, Some("FL Studio 21".to_string()));
+    }
+
+    #[test]
+    fn render_dialog_title_matches_export_dialogs_only() {
+        assert!(is_render_dialog_title("Rendering..."));
+        assert!(is_render_dialog_title("RENDERING audio"));
+        // Main titles always name FL Studio, even for render-named projects.
+        assert!(!is_render_dialog_title("rendering.flp - FL Studio 21"));
+        assert!(!is_render_dialog_title("song.flp - FL Studio 21"));
+        assert!(!is_render_dialog_title("FL Studio 21"));
+    }
+
+    #[test]
+    fn rendering_transition_publishes_new_activity() {
+        // Starting a render must replace the editing activity, and finishing
+        // it must publish the editing activity again.
+        let mut plugin = FlStudioPlugin::new();
+
+        let editing = plugin
+            .observe_title("song.flp - FL Studio 21", false)
+            .unwrap()
+            .expect("editing should publish");
+        assert_eq!(editing.state, "song.flp");
+
+        let rendering = plugin
+            .observe_title("song.flp - FL Studio 21", true)
+            .unwrap()
+            .expect("render start must publish");
+        assert_eq!(rendering.state, "Rendering song.flp");
+
+        // Unchanged render state is deduped.
+        assert!(plugin
+            .observe_title("song.flp - FL Studio 21", true)
+            .unwrap()
+            .is_none());
+
+        let back = plugin
+            .observe_title("song.flp - FL Studio 21", false)
+            .unwrap()
+            .expect("render end must publish");
+        assert_eq!(back.state, "song.flp");
+    }
+
+    #[test]
     fn timestamp_persists_across_title_updates() {
         let mut plugin = FlStudioPlugin::new();
         let act1 = plugin
-            .observe_title("song.flp - FL Studio 2025")
+            .observe_title("song.flp - FL Studio 2025", false)
             .unwrap()
             .unwrap();
         let ts1 = act1.timestamps.unwrap().start;
         assert!(ts1.is_some());
 
         let act2 = plugin
-            .observe_title("other.flp - FL Studio 2025")
+            .observe_title("other.flp - FL Studio 2025", false)
             .unwrap()
             .unwrap();
         let ts2 = act2.timestamps.unwrap().start;
@@ -679,14 +819,18 @@ mod tests {
         let mut plugin = FlStudioPlugin::new();
 
         // Open Project A → published.
-        let first = plugin.observe_title("song.flp - FL Studio 2025").unwrap();
+        let first = plugin
+            .observe_title("song.flp - FL Studio 2025", false)
+            .unwrap();
         assert!(
             first.is_some(),
             "first observation should publish an activity"
         );
 
         // Poll again → suppressed by duplicate detection.
-        let second = plugin.observe_title("song.flp - FL Studio 2025").unwrap();
+        let second = plugin
+            .observe_title("song.flp - FL Studio 2025", false)
+            .unwrap();
         assert!(second.is_none(), "identical activity should be suppressed");
     }
 
@@ -699,13 +843,13 @@ mod tests {
 
         // Open Project A → published.
         assert!(plugin
-            .observe_title("song.flp - FL Studio 2025")
+            .observe_title("song.flp - FL Studio 2025", false)
             .unwrap()
             .is_some());
 
         // Poll again → suppressed.
         assert!(plugin
-            .observe_title("song.flp - FL Studio 2025")
+            .observe_title("song.flp - FL Studio 2025", false)
             .unwrap()
             .is_none());
 
@@ -714,7 +858,9 @@ mod tests {
         assert!(plugin.application_not_found().is_err());
 
         // Reopen Project A → must publish again, not be suppressed.
-        let republished = plugin.observe_title("song.flp - FL Studio 2025").unwrap();
+        let republished = plugin
+            .observe_title("song.flp - FL Studio 2025", false)
+            .unwrap();
         assert!(
             republished.is_some(),
             "activity must republish after application exit"

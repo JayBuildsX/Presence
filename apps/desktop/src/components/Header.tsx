@@ -8,6 +8,7 @@ interface HeaderProps {
   showSettings: boolean;
   onTogglePause: () => void;
   onToggleSettings: () => void;
+  onReconnectDiscord?: () => void;
 }
 
 export default function Header({
@@ -16,6 +17,7 @@ export default function Header({
   showSettings,
   onTogglePause,
   onToggleSettings,
+  onReconnectDiscord,
 }: HeaderProps) {
   const status = globalStatus(state);
 
@@ -49,10 +51,39 @@ export default function Header({
       </div>
 
       <div className="header-actions">
-        <div className={`status-badge ${status.dot}-badge`}>
+        <div
+          className={`status-badge ${status.dot}-badge ${!state.discord_connected && onReconnectDiscord ? "is-clickable" : ""}`}
+          onClick={!state.discord_connected ? onReconnectDiscord : undefined}
+          title={!state.discord_connected ? "Click to reconnect to Discord" : undefined}
+        >
           <StatusDot className={status.dot} />
           <span className="status-label">{status.label}</span>
         </div>
+
+        {!state.discord_connected && onReconnectDiscord && (
+          <button
+            type="button"
+            className="reconnect-button"
+            disabled={busy}
+            onClick={onReconnectDiscord}
+            title="Reconnect to Discord"
+            aria-label="Reconnect to Discord"
+          >
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+            </svg>
+            <span>Reconnect</span>
+          </button>
+        )}
 
         <button
           type="button"

@@ -60,8 +60,23 @@ pub async fn drag_window(window: tauri::Window) -> Result<(), String> {
     window.start_dragging().map_err(|e| e.to_string())
 }
 
-/// Closes or hides the application window.
+/// Reconnects outputs (Discord) and republishes active rich presence.
+#[tauri::command]
+pub async fn reconnect_discord(state: State<'_, AppState>) -> Result<LiveState, String> {
+    let mut runtime = state.runtime.lock().await;
+    runtime.reconnect_discord()?;
+    Ok(runtime.snapshot())
+}
+
+/// Hides the application window to system tray.
 #[tauri::command]
 pub async fn close_window(window: tauri::Window) -> Result<(), String> {
-    window.close().map_err(|e| e.to_string())
+    window.hide().map_err(|e| e.to_string())
+}
+
+/// Explicitly terminates the application.
+#[tauri::command]
+pub async fn quit_app(app: tauri::AppHandle) -> Result<(), String> {
+    app.exit(0);
+    Ok(())
 }

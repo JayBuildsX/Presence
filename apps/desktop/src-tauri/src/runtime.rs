@@ -95,7 +95,7 @@ pub struct Runtime {
 ///
 /// Sources are tracked independently so one plugin's failure can never
 /// suppress another plugin's warnings.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct PollErrorTracker {
     /// Most recent error message per source; a missing entry means the
     /// source was last seen healthy.
@@ -347,7 +347,37 @@ impl Runtime {
             self.handle_poll_result(&mut poll_errors, source, result);
         }
 
+        // Automatic output recovery: If an active presence exists but Discord
+        // is disconnected (e.g. Discord was closed and restarted), attempt to
+        // republish so the connection is restored automatically without user intervention.
+        if !self.paused && !self.engine.any_output_connected() {
+            if let (Some(source), Some(activity)) = (
+                self.engine.displayed_source().map(str::to_owned),
+                self.engine.current_activity().cloned(),
+            ) {
+                let _ = self.engine.publish_now(&source, &activity);
+            }
+        }
+
         self.poll_errors = poll_errors;
+    }
+
+    /// Attempt to reconnect outputs (Discord) and republish the active presence.
+    pub fn reconnect_discord(&mut self) -> Result<bool, String> {
+        if let (Some(source), Some(activity)) = (
+            self.engine.displayed_source().map(str::to_owned),
+            self.engine.current_activity().cloned(),
+        ) {
+            let _ = self.engine.publish_now(&source, &activity);
+        } else {
+            // Even if idle, poll once to check if any active plugin can publish
+            let mut poll_errors = self.poll_errors.clone();
+            for (source, result) in self.host.poll_all() {
+                self.handle_poll_result(&mut poll_errors, source, result);
+            }
+            self.poll_errors = poll_errors;
+        }
+        Ok(self.engine.any_output_connected())
     }
 
     /// The polling interval between iterations.
@@ -1777,5 +1807,21 @@ mod tests {
         assert!(content.contains("flstudio = true"));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reconnect_discord_republishes_active_session() {
+        let mut runtime = Runtime::new();
+        runtime
+            .host
+            .register(Box::new(MockActivityPlugin::new("FL Studio")));
+
+        runtime.poll_once();
+        assert!(runtime.engine.current_activity().is_some());
+
+        // Reconnect discord should succeed and republish
+        let result = runtime.reconnect_discord();
+        assert!(result.is_ok());
+        assert!(runtime.engine.current_activity().is_some());
     }
 }
