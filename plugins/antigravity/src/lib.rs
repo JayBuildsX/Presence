@@ -90,18 +90,22 @@ impl AntigravityPlugin {
         &mut self,
         parsed_state: &AntigravityState,
     ) -> Result<Option<Activity>, PluginError> {
-        // Maintain persistent session timestamp
-        let start_time = match self.session_start_time {
-            Some(ts) => ts,
-            None => {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64;
-                self.session_start_time = Some(now);
-                now
-            }
-        };
+        // Prefer the real Antigravity process start time so the elapsed timer
+        // counts since the application launched, not since PresenceHub
+        // started tracking it. The stored session time is only a fallback
+        // for when the process start cannot be read.
+        let start_time = presencehub_core::process::process_start_unix(&["antigravity.exe"])
+            .unwrap_or_else(|| match self.session_start_time {
+                Some(ts) => ts,
+                None => {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    self.session_start_time = Some(now);
+                    now
+                }
+            });
 
         let activity = build_activity(parsed_state, start_time);
 

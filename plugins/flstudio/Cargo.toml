@@ -9,4 +9,4 @@ presencehub-core.path = "../../crates/core"
 presencehub-plugin-host.path = "../../crates/plugin-host"
 thiserror.workspace = true
 tracing.workspace = true
-winapi = { version = "0.3", features = ["winuser", "errhandlingapi"] }
+winapi = { version = "0.3", features = ["winuser", "errhandlingapi", "tlhelp32", "handleapi"] }

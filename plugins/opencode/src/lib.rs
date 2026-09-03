@@ -27,23 +27,20 @@
 //!    - `details`: `"Project: <name>"` using only the last path component
 //!      of the workspace directory (never the full filesystem path)
 //!    - `metadata`:
-//!      - `large_image`/`large_text`: the file type's icon URL and display
-//!        name (e.g. the Rust icon / `"Rust"`), shown as the large image and
-//!        its hover text. Icons are resolved VS-Code-style by
-//!        [`FileIconResolver`]: exact file name first (`Dockerfile`,
-//!        `package.json`, ...), then extension, then no icon. The URL is
-//!        rehosted by Discord's media proxy, so no Discord asset upload is
-//!        required.
-//!      - `small_image`/`small_text`: the OpenCode logo URL / `"OpenCode"`
+//!      - `large_image`/`large_text`: the file type's Discord application
+//!        asset key and display name (e.g. `rust` / `"Rust"`), shown as the
+//!        large image and its hover text. Icons are resolved by
+//!        [`FileIconResolver`]: exact file name first (`Cargo.toml`,
+//!        `package.json`, ...), then extension, then no icon. Keys must be
+//!        uploaded to the Discord application; there are no external URLs.
 //!      - `project`: human-readable project name
 //!    - `application`: deliberately `None` so the application identity never
 //!      overrides the file type's label in the large-image hover
 //!
-//! The Discord application (ID 1538988824623972492) requires no uploaded
-//! assets: both images are external URLs fetched by Discord's media proxy.
-//! All icon URLs are pinned to immutable releases (the Material Icon Theme
-//! npm package at a fixed version and the OpenCode logo at a fixed commit);
-//! see [`file_icons`] and [`OPENCODE_LOGO_URL`].
+//! The Discord application (ID 1273940066603106328, the vsc-presence app)
+//! hosts the icon assets: `large_image` is a short asset key, exactly like
+//! `brkpoint/VSCode-Discord-RPC`. No small image is set for now; one will be
+//! added once our own assets are uploaded to our own application.
 //!
 //! # Privacy
 //!
@@ -54,7 +51,7 @@
 //! - Prompt contents or chat messages
 //! - API keys or tokens
 
-use presencehub_core::activity::Activity;
+use presencehub_core::activity::{Activity, ActivityTimestamps};
 use presencehub_plugin_host::{Plugin, PluginError, PluginMetadata, WindowIdentity};
 
 mod detection;
@@ -70,12 +67,6 @@ pub use state::{parse_file_view, parse_window_state, OpenCodeState};
 
 /// The canonical application name for this plugin.
 pub const APPLICATION_NAME: &str = "OpenCode";
-
-/// External URL for the OpenCode logo (a transparent 600x600 PNG in the
-/// OpenCode repo, pinned to an immutable commit — never the moving `dev`
-/// branch). Discord's media proxy fetches and caches it server-side, so no
-/// asset needs to be uploaded to the Discord application.
-pub const OPENCODE_LOGO_URL: &str = "https://raw.githubusercontent.com/anomalyco/opencode/65c35977bd564e23c0e9cf124b3e3e3b9308e9e8/packages/console/app/src/asset/brand/opencode-logo-light-square.png";
 
 /// The OpenCode plugin.
 ///
@@ -258,9 +249,9 @@ fn advance_file_tracking(viewed_files: &mut Vec<String>, files: &[String]) -> Op
 /// file (if any).
 ///
 /// When the user is viewing a file, the primary line is the file name with
-/// its extension ("Editing main.rs"), the file type's icon and label drive
-/// the large image/hover, and the OpenCode logo rides along as the small
-/// image. The project name never exposes a full filesystem path.
+/// its extension ("Editing main.rs"), the file type's asset key and label
+/// drive the large image/hover, and no small image is set. The project name
+/// never exposes a full filesystem path.
 fn build_activity(state: &OpenCodeState, file: Option<&str>) -> Activity {
     // Extract a safe, human-readable project name from the workspace
     // directory. Only the last path component is used; full paths are never
@@ -291,32 +282,40 @@ fn build_activity(state: &OpenCodeState, file: Option<&str>) -> Activity {
 
     let mut metadata = std::collections::HashMap::new();
 
-    // Large image = the file type's icon (an external URL Discord's media
-    // proxy rehosts), hover = the file type name. The metadata map is built
-    // from scratch on every poll, so a file whose icon cannot be resolved
-    // yields an activity *without* `large_image`/`large_text`: the previous
-    // file's icon is never carried over (no stale icons).
+    // Large image = the file type's Discord application asset key, hover =
+    // the file type name. The metadata map is built from scratch on every
+    // poll, so a file whose icon cannot be resolved yields an activity
+    // *without* `large_image`/`large_text`: the previous file's icon is
+    // never carried over (no stale icons). No small image is set, matching
+    // the reference method.
     if let Some(res) = resolution.as_ref() {
-        if let (Some(image), Some(label)) = (res.image_url.as_deref(), res.label.as_deref()) {
-            metadata.insert("large_image".to_string(), image.to_string());
+        if let (Some(key), Some(label)) = (res.image_key, res.label) {
+            metadata.insert("large_image".to_string(), key.to_string());
             metadata.insert("large_text".to_string(), label.to_string());
         }
     }
 
-    // Small image = the OpenCode logo (also an external URL). `application`
-    // is deliberately left None so the application identity does not
-    // override the file type's label in the large-image hover.
-    metadata.insert("small_image".to_string(), OPENCODE_LOGO_URL.to_string());
-    metadata.insert("small_text".to_string(), APPLICATION_NAME.to_string());
-
+    // `application` is deliberately left None so the application identity
+    // does not override the file type's label in the large-image hover.
     if let Some(name) = &project_name {
         metadata.insert("project".to_string(), name.clone());
     }
 
+    // Stamp the real OpenCode process start time so the elapsed timer counts
+    // since the application launched, not since PresenceHub started tracking
+    // it. When unavailable the engine falls back to its session timer.
+    let timestamps =
+        presencehub_core::process::process_start_unix(&[detection::OPENCODE_PROCESS_NAME]).map(
+            |start| ActivityTimestamps {
+                start: Some(start),
+                end: None,
+            },
+        );
+
     Activity {
         state: activity_state,
         details,
-        timestamps: None,
+        timestamps,
         application: None,
         metadata,
     }
@@ -338,21 +337,14 @@ mod tests {
 
     #[test]
     fn application_identity_is_opencode() {
-        // The OpenCode identity rides in the small-image assets. The
+        // No small image is set (matching the reference method). The
         // `application` field must stay None so the application identity
-        // never overrides the file type's language name in the large-image
-        // hover text.
+        // never overrides the file type's label in the large-image hover.
         let state = open_with_state();
         let activity = build_activity(&state, None);
         assert_eq!(activity.application, None);
-        assert_eq!(
-            activity.metadata.get("small_image"),
-            Some(&OPENCODE_LOGO_URL.to_string())
-        );
-        assert_eq!(
-            activity.metadata.get("small_text"),
-            Some(&"OpenCode".to_string())
-        );
+        assert!(!activity.metadata.contains_key("small_image"));
+        assert!(!activity.metadata.contains_key("small_text"));
     }
 
     #[test]
@@ -386,28 +378,22 @@ mod tests {
     #[test]
     fn activity_with_file_shows_name_extension_and_language() {
         // The primary line is "Editing <file.ext>"; the large image uses the
-        // language's logo URL and the hover shows the full language name.
+        // file type's asset key and the hover shows the file type name. No
+        // small image is set.
         let state = open_with_state();
         let activity = build_activity(&state, Some("crates/core/src/main.rs"));
         assert_eq!(activity.state, "Editing main.rs");
         assert_eq!(activity.details, Some("Project: MyProject".to_string()));
-        let large_image = activity.metadata.get("large_image").unwrap();
-        assert!(
-            large_image.contains("rust"),
-            "large image should carry the Rust logo URL, got {large_image}"
+        assert_eq!(
+            activity.metadata.get("large_image"),
+            Some(&"rust".to_string())
         );
         assert_eq!(
             activity.metadata.get("large_text"),
             Some(&"Rust".to_string())
         );
-        assert_eq!(
-            activity.metadata.get("small_image"),
-            Some(&OPENCODE_LOGO_URL.to_string())
-        );
-        assert_eq!(
-            activity.metadata.get("small_text"),
-            Some(&"OpenCode".to_string())
-        );
+        assert!(!activity.metadata.contains_key("small_image"));
+        assert!(!activity.metadata.contains_key("small_text"));
     }
 
     #[test]
@@ -419,56 +405,54 @@ mod tests {
         assert_eq!(activity.state, "Editing notes.xyz");
         assert!(!activity.metadata.contains_key("large_image"));
         assert!(!activity.metadata.contains_key("large_text"));
-        // OpenCode identity still present.
-        assert_eq!(
-            activity.metadata.get("small_image"),
-            Some(&OPENCODE_LOGO_URL.to_string())
-        );
     }
 
     #[test]
-    fn known_generic_file_type_gets_appropriate_icon() {
-        // A recognized-but-plain file (text) gets a generic appropriate icon
-        // rather than no icon or a language-specific icon.
+    fn files_without_a_hosted_key_carry_no_icon() {
+        // Dockerfiles, lockfiles, and config formats without a hosted asset
+        // key (TOML, YAML, SQL, SVG, ...) yield no large image.
         let state = open_with_state();
-        let activity = build_activity(&state, Some("src/notes.txt"));
-        let large_image = activity.metadata.get("large_image").unwrap();
-        assert!(
-            large_image.contains("document"),
-            "plain text should use the generic document icon, got {large_image}"
-        );
-        assert_eq!(
-            activity.metadata.get("large_text"),
-            Some(&"Text".to_string())
-        );
+        for path in [
+            "Dockerfile",
+            "Makefile",
+            "src/config.toml",
+            "src/config.yaml",
+            "src/query.sql",
+            "src/image.svg",
+            "src/notes.txt",
+        ] {
+            let activity = build_activity(&state, Some(path));
+            assert!(
+                !activity.metadata.contains_key("large_image"),
+                "{path}: must have no large image"
+            );
+            assert!(!activity.metadata.contains_key("large_text"));
+        }
     }
 
     #[test]
     fn icon_transitions_never_leave_a_stale_image() {
         // The regression the resolver must prevent: switching from lib.rs to
-        // index.html replaces the Rust icon, and a subsequent unsupported
+        // index.html replaces the Rust key, and a subsequent unsupported
         // file clears the large image entirely instead of keeping the old one.
         let state = open_with_state();
         let cases = [
             ("src/lib.rs", Some("rust")),
             ("src/index.html", Some("html")),
             ("src/main.ts", Some("typescript")),
-            ("src/component.tsx", Some("react_ts")),
+            ("src/component.tsx", Some("tsx")),
             ("src/data.json", Some("json")),
-            ("src/image.svg", Some("svg")),
+            ("src/script.py", Some("python")),
             ("src/unknown.xyz", None),
         ];
-        for (path, expected_substring) in cases {
+        for (path, expected_key) in cases {
             let activity = build_activity(&state, Some(path));
-            match expected_substring {
-                Some(substring) => {
-                    let image = activity
-                        .metadata
-                        .get("large_image")
-                        .unwrap_or_else(|| panic!("{path} should have a large image"));
-                    assert!(
-                        image.contains(substring),
-                        "{path}: expected icon containing {substring:?}, got {image}"
+            match expected_key {
+                Some(key) => {
+                    assert_eq!(
+                        activity.metadata.get("large_image"),
+                        Some(&key.to_string()),
+                        "{path}: expected asset key {key}"
                     );
                 }
                 None => {

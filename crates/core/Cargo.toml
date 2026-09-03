@@ -12,3 +12,6 @@ tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["tlhelp32", "processthreadsapi", "handleapi", "winnt", "minwinbase"] }

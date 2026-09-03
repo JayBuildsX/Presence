@@ -1,18 +1,24 @@
 //! FL Studio Plugin
 //!
 //! Production plugin that observes FL Studio and produces canonical
-//! PresenceHub Activities by parsing the FL Studio window title.
+//! PresenceHub Activities by reading the FL Studio window title.
+//!
+//! Implemented following `zfi2/FL-Studio-Discord-RPC`:
 //!
 //! # Window Detection
 //!
-//! The main FL Studio window is identified by its **window class name**
-//! (`TFruityLoopsMainForm`), which is a stable, application-set identifier
-//! that does not change across FL Studio versions or window state changes.
+//! FL Studio is found by process name (`FL64.exe` / `FL.exe`): all PIDs
+//! owned by those processes are collected, then top-level windows are
+//! enumerated and the first visible window belonging to one of those PIDs
+//! with a non-empty title wins. No window class matching is involved.
 //!
-//! This is more reliable than title-based matching because:
-//! - "Welcome to FL Studio" (class: `TWelcomeWizard`) is a popup, not the main window
-//! - "Mixer - FL Studio", "Piano Roll - FL Studio" etc. are child windows with different classes
-//! - The main window's class name is always `TFruityLoopsMainForm` regardless of project state
+//! # Title Parsing
+//!
+//! The title is split on the first hyphen: the part before it is the
+//! project name, the part after it is the application name
+//! (`"song.flp - FL Studio 21"` → project `"song.flp"`, app
+//! `"FL Studio 21"`). A title without a hyphen carries no project. A
+//! trailing `*` on the project marks unsaved changes.
 
 #![cfg(windows)]
 
@@ -75,27 +81,33 @@ pub struct ParsedTitle {
 
 /// Parse an FL Studio window title into structured data.
 ///
-/// Supports both old and new title formats:
+/// Following `zfi2/FL-Studio-Discord-RPC`, the title is split on the first
+/// hyphen:
 ///
-/// # Old Format
-/// - `"FL Studio 20"` — no project loaded
-/// - `"FL Studio 20 - [song.flp]"` — project loaded
-/// - `"FL Studio 20 - [song.flp*]"` — project loaded, unsaved
-///
-/// # New Format (FL Studio 2025+)
-/// - `"FL Studio 2025"` — no project loaded
-/// - `"song.flp - FL Studio 2025"` — project loaded
-/// - `"song.flp* - FL Studio 2025"` — project loaded, unsaved
+/// - `"song.flp - FL Studio 21"` — project `"song.flp"`, version `"21"`
+/// - `"song.flp* - FL Studio 21"` — project `"song.flp"`, unsaved
+/// - `"FL Studio 21"` — no project loaded
 pub fn parse_window_title(title: &str) -> Result<ParsedTitle, FlStudioError> {
-    let version = extract_version(title);
-    let project = extract_project(title);
-    let has_unsaved_changes = has_unsaved_changes(title);
-
-    Ok(ParsedTitle {
-        version,
-        project,
-        has_unsaved_changes,
-    })
+    match title.split_once('-') {
+        Some((before, after)) => {
+            let raw_project = before.trim();
+            let (project, has_unsaved_changes) = match raw_project.strip_suffix('*') {
+                Some(stripped) if !stripped.is_empty() => (Some(stripped.to_string()), true),
+                _ if raw_project.is_empty() => (None, false),
+                _ => (Some(raw_project.to_string()), false),
+            };
+            Ok(ParsedTitle {
+                version: extract_version(after),
+                project,
+                has_unsaved_changes,
+            })
+        }
+        None => Ok(ParsedTitle {
+            version: extract_version(title),
+            project: None,
+            has_unsaved_changes: false,
+        }),
+    }
 }
 
 /// Extract the version number from the title.
@@ -117,200 +129,122 @@ fn extract_version(title: &str) -> Option<String> {
     }
 }
 
-/// Extract the project filename from the title.
-///
-/// Handles both formats:
-/// - Old: `[song.flp]` or `[song.flp*]` — extract from brackets
-/// - New: `song.flp - FL Studio` or `song.flp* - FL Studio` — extract from the prefix before " - FL Studio"
-fn extract_project(title: &str) -> Option<String> {
-    // Old format: "[ProjectName.flp]" or "[ProjectName.flp*]"
-    if let Some(start) = title.find('[') {
-        if let Some(end) = title.find(']') {
-            if start < end {
-                let mut project = title[start + 1..end].to_string();
-                if project.ends_with('*') {
-                    project.pop();
-                }
-                if !project.is_empty() {
-                    return Some(project);
-                }
-            }
-        }
-    }
-
-    // New format: "ProjectName.flp - FL Studio" or "ProjectName.flp* - FL Studio"
-    if let Some(pos) = title.find(" - FL Studio") {
-        let prefix = &title[..pos];
-        let mut project = prefix.to_string();
-        // Strip trailing asterisk (unsaved marker)
-        if project.ends_with('*') {
-            project.pop();
-        }
-        if !project.is_empty() && project.ends_with(".flp") {
-            return Some(project);
-        }
-    }
-
-    None
-}
-
-/// Check if the title indicates unsaved changes.
-///
-/// Handles both formats:
-/// - Old: `"... - [song.flp*]"` — ends with `*]`
-/// - New: `"song.flp* - FL Studio 2025"` — contains `* - FL Studio`
-fn has_unsaved_changes(title: &str) -> bool {
-    // Old format: ends with "*]"
-    if title.ends_with("*]") {
-        return true;
-    }
-    // New format: contains "* - FL Studio"
-    if title.contains("* - FL Studio") {
-        return true;
-    }
-    false
-}
-
-/// Check if a window title belongs to the main FL Studio window (not a popup).
-///
-/// This is a secondary check used alongside class name matching.
-/// The title must contain "FL Studio" to be considered a candidate.
-pub fn is_main_window_title(title: &str) -> bool {
-    title.contains("FL Studio")
-}
-
 // ---------------------------------------------------------------------------
 // Windows API (platform-specific)
 // ---------------------------------------------------------------------------
 
 #[cfg(windows)]
 mod windows {
-    use std::cell::Cell;
-    use winapi::shared::minwindef::{BOOL, LPARAM, TRUE};
+    use std::cell::RefCell;
+    use winapi::shared::minwindef::{BOOL, FALSE, LPARAM, TRUE};
     use winapi::shared::windef::HWND;
+    use winapi::um::handleapi::CloseHandle;
+    use winapi::um::tlhelp32::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
     use winapi::um::winuser::{
-        EnumWindows, GetClassNameW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+        EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
     };
 
-    /// Information about a candidate FL Studio window.
-    #[derive(Debug, Clone)]
-    #[allow(dead_code)]
-    struct WindowInfo {
-        hwnd: HWND,
-        title: String,
-        class_name: String,
-        process_id: u32,
-    }
+    /// Process base names belonging to FL Studio.
+    const FL_PROCESS_NAMES: &[&str] = &["FL64.exe", "FL.exe"];
 
     thread_local! {
-        static CANDIDATES: Cell<Option<Vec<WindowInfo>>> = const { Cell::new(None) };
+        /// PIDs owned by the FL Studio processes for the current lookup.
+        static TARGET_PIDS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+        /// First matching window title found during enumeration.
+        static FOUND_TITLE: RefCell<Option<String>> = const { RefCell::new(None) };
     }
 
-    /// Callback for EnumWindows. Collects all visible windows whose class name
-    /// matches the FL Studio main window class (`TFruityLoopsMainForm`).
+    /// Collect the PIDs of all running FL Studio processes.
+    fn collect_fl_pids() -> Vec<u32> {
+        let mut pids = Vec::new();
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snapshot.is_null() {
+                return pids;
+            }
+
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+            if Process32FirstW(snapshot, &mut entry) != FALSE {
+                loop {
+                    let len = entry
+                        .szExeFile
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(entry.szExeFile.len());
+                    let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+                    if FL_PROCESS_NAMES
+                        .iter()
+                        .any(|wanted| name.eq_ignore_ascii_case(wanted))
+                    {
+                        pids.push(entry.th32ProcessID);
+                    }
+                    if Process32NextW(snapshot, &mut entry) == FALSE {
+                        break;
+                    }
+                }
+            }
+
+            CloseHandle(snapshot);
+        }
+        pids
+    }
+
+    /// Callback for EnumWindows. Takes the first visible window owned by one
+    /// of the FL Studio PIDs whose title is non-empty, then stops.
     unsafe extern "system" fn enum_callback(hwnd: HWND, _lparam: LPARAM) -> BOOL {
-        // Only consider visible windows
+        if FOUND_TITLE.with(|found| found.borrow().is_some()) {
+            return FALSE; // already have a title, stop
+        }
         if IsWindowVisible(hwnd) == 0 {
             return TRUE; // skip, continue
         }
 
-        // Get window title
-        let mut title_buf = [0u16; 4096];
-        let title_len = GetWindowTextW(hwnd, title_buf.as_mut_ptr(), 4096);
-        let title = if title_len > 0 {
-            String::from_utf16_lossy(&title_buf[..title_len as usize])
-        } else {
-            String::new()
-        };
-
-        // Get class name
-        let mut class_buf = [0u16; 256];
-        let class_len = GetClassNameW(hwnd, class_buf.as_mut_ptr(), 256);
-        let class_name = if class_len > 0 {
-            String::from_utf16_lossy(&class_buf[..class_len as usize])
-        } else {
-            String::new()
-        };
-
-        // Get process ID
-        let mut process_id: u32 = 0;
-        GetWindowThreadProcessId(hwnd, &mut process_id);
-
-        // Only collect windows whose class name matches the FL Studio main window class
-        // and whose title contains "FL Studio" (secondary verification)
-        if class_name == super::FLSTUDIO_MAIN_WINDOW_CLASS && super::is_main_window_title(&title) {
-            CANDIDATES.with(|cell| {
-                let mut candidates = cell.take().unwrap_or_default();
-                candidates.push(WindowInfo {
-                    hwnd,
-                    title,
-                    class_name,
-                    process_id,
-                });
-                cell.set(Some(candidates));
-            });
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if !TARGET_PIDS.with(|targets| targets.borrow().contains(&pid)) {
+            return TRUE; // not an FL Studio window, continue
         }
 
-        TRUE // continue enumeration
+        let mut title_buf = [0u16; 4096];
+        let title_len = GetWindowTextW(hwnd, title_buf.as_mut_ptr(), 4096);
+        if title_len <= 0 {
+            return TRUE; // untitled, continue
+        }
+        let title = String::from_utf16_lossy(&title_buf[..title_len as usize]);
+        if title.is_empty() {
+            return TRUE; // continue
+        }
+
+        FOUND_TITLE.with(|found| *found.borrow_mut() = Some(title));
+        FALSE // stop enumeration
     }
 
-    /// Find the main FL Studio window.
+    /// Find FL Studio's window title.
     ///
-    /// Uses the window class name (`TFruityLoopsMainForm`) as the primary
-    /// identifier, which is stable across FL Studio versions and project states.
-    /// The title must also contain "FL Studio" as a secondary verification.
-    ///
-    /// Returns the HWND and title of the first matching window, or None if
-    /// FL Studio is not running.
-    pub fn find_flstudio_window() -> Option<(HWND, String)> {
+    /// Collects the PIDs of the `FL64.exe` / `FL.exe` processes, then takes
+    /// the first visible window owned by one of them with a non-empty title.
+    /// Returns `None` when FL Studio is not running or has no titled window.
+    pub fn find_flstudio_window_title() -> Option<String> {
         unsafe {
-            CANDIDATES.set(None);
+            TARGET_PIDS.with(|targets| *targets.borrow_mut() = collect_fl_pids());
+            if TARGET_PIDS.with(|targets| targets.borrow().is_empty()) {
+                return None;
+            }
+            FOUND_TITLE.with(|found| *found.borrow_mut() = None);
             EnumWindows(Some(enum_callback), 0);
-
-            CANDIDATES.with(|cell| {
-                let candidates = cell.take().unwrap_or_default();
-
-                if candidates.is_empty() {
-                    return None;
-                }
-
-                // Take the first candidate (there should only be one main window)
-                Some((candidates[0].hwnd, candidates[0].title.clone()))
-            })
+            FOUND_TITLE.with(|found| found.borrow_mut().take())
         }
     }
 }
 
 /// Get the FL Studio window title, or None if not found.
 pub fn get_flstudio_title() -> Option<String> {
-    windows::find_flstudio_window().map(|(_hwnd, title)| title)
-}
-
-// ---------------------------------------------------------------------------
-// Console Logger (temporary output for validation)
-// ---------------------------------------------------------------------------
-
-/// Print an Activity to the console in a human-readable format.
-///
-/// This is a temporary validation output. It does not know anything
-/// about FL Studio. It only receives canonical Activities.
-pub fn log_activity(activity: &Activity) {
-    println!("--------------------------------------------------");
-    println!("PresenceHub Activity");
-    println!();
-    if let Some(app) = activity.metadata.get("application") {
-        println!("Application: {}", app);
-    }
-    println!("State: {}", activity.state);
-    if let Some(ref details) = activity.details {
-        println!("Details: {}", details);
-    }
-    println!();
-    println!("Metadata");
-    for (key, value) in &activity.metadata {
-        println!("{} = {}", key, value);
-    }
-    println!("--------------------------------------------------");
+    windows::find_flstudio_window_title()
 }
 
 // ---------------------------------------------------------------------------
@@ -375,18 +309,22 @@ impl FlStudioPlugin {
         let parsed =
             parse_window_title(title).map_err(|e| PluginError::PollFailed(e.to_string()))?;
 
-        // Initialize persistent session start time if this is a newly active session
-        let start_time = match self.session_start_time {
-            Some(ts) => ts,
-            None => {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64;
-                self.session_start_time = Some(now);
-                now
-            }
-        };
+        // Prefer the real FL Studio process start time so the elapsed timer
+        // counts since the application launched, not since PresenceHub
+        // started tracking it. The stored session time is only a fallback
+        // for when the process start cannot be read.
+        let start_time = presencehub_core::process::process_start_unix(&["FL64.exe", "FL.exe"])
+            .unwrap_or_else(|| match self.session_start_time {
+                Some(ts) => ts,
+                None => {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    self.session_start_time = Some(now);
+                    now
+                }
+            });
 
         let activity = build_activity(&parsed, start_time);
 
@@ -506,50 +444,61 @@ pub fn build_activity(parsed: &ParsedTitle, start_timestamp: i64) -> Activity {
 mod tests {
     use super::*;
 
-    // -- Parser tests: Old Format ------------------------------------------------
+    // -- Parser tests: hyphen-split titles -------------------------------------
 
     #[test]
-    fn parse_title_old_format_with_project() {
-        let parsed = parse_window_title("FL Studio 20 - [song.flp]").unwrap();
-        assert_eq!(parsed.version, Some("20".to_string()));
+    fn parse_title_with_project() {
+        let parsed = parse_window_title("song.flp - FL Studio 21").unwrap();
+        assert_eq!(parsed.version, Some("21".to_string()));
         assert_eq!(parsed.project, Some("song.flp".to_string()));
         assert!(!parsed.has_unsaved_changes);
     }
 
     #[test]
-    fn parse_title_old_format_with_project_unsaved() {
-        let parsed = parse_window_title("FL Studio 20 - [song.flp*]").unwrap();
-        assert_eq!(parsed.version, Some("20".to_string()));
+    fn parse_title_with_project_unsaved() {
+        let parsed = parse_window_title("song.flp* - FL Studio 21").unwrap();
+        assert_eq!(parsed.version, Some("21".to_string()));
         assert_eq!(parsed.project, Some("song.flp".to_string()));
         assert!(parsed.has_unsaved_changes);
     }
 
     #[test]
-    fn parse_title_old_format_no_project() {
-        let parsed = parse_window_title("FL Studio 20").unwrap();
-        assert_eq!(parsed.version, Some("20".to_string()));
+    fn parse_title_no_project() {
+        let parsed = parse_window_title("FL Studio 21").unwrap();
+        assert_eq!(parsed.version, Some("21".to_string()));
         assert!(parsed.project.is_none());
         assert!(!parsed.has_unsaved_changes);
     }
 
     #[test]
-    fn parse_title_old_format_version_21() {
-        let parsed = parse_window_title("FL Studio 21 - [track.flp]").unwrap();
-        assert_eq!(parsed.version, Some("21".to_string()));
-        assert_eq!(parsed.project, Some("track.flp".to_string()));
-    }
-
-    #[test]
-    fn parse_title_old_format_unknown_version() {
-        let parsed = parse_window_title("FL Studio - [song.flp]").unwrap();
+    fn parse_title_unknown_version_with_project() {
+        let parsed = parse_window_title("song.flp - FL Studio").unwrap();
         assert!(parsed.version.is_none());
         assert_eq!(parsed.project, Some("song.flp".to_string()));
     }
 
-    // -- Parser tests: New Format (FL Studio 2025+) ------------------------------
+    #[test]
+    fn parse_title_splits_on_first_hyphen() {
+        // Like the reference implementation, only the first hyphen separates
+        // the project from the application name.
+        let parsed = parse_window_title("my-song.flp - FL Studio 21").unwrap();
+        assert_eq!(parsed.version, Some("21".to_string()));
+        assert_eq!(parsed.project, Some("my".to_string()));
+        assert!(!parsed.has_unsaved_changes);
+    }
 
     #[test]
-    fn parse_title_new_format_no_project() {
+    fn parse_title_empty_project_before_hyphen() {
+        let parsed = parse_window_title(" - FL Studio 21").unwrap();
+        assert_eq!(parsed.version, Some("21".to_string()));
+        assert!(parsed.project.is_none());
+        assert!(!parsed.has_unsaved_changes);
+    }
+
+    // -- Parser tests: 2025 titles ------------------------------------------------
+
+    #[test]
+    fn parse_title_2025_no_project() {
         let parsed = parse_window_title("FL Studio 2025").unwrap();
         assert_eq!(parsed.version, Some("2025".to_string()));
         assert!(parsed.project.is_none());
@@ -557,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_title_new_format_with_project() {
+    fn parse_title_2025_with_project() {
         let parsed = parse_window_title("1409.flp - FL Studio 2025").unwrap();
         assert_eq!(parsed.version, Some("2025".to_string()));
         assert_eq!(parsed.project, Some("1409.flp".to_string()));
@@ -565,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_title_new_format_with_project_unsaved() {
+    fn parse_title_2025_with_project_unsaved() {
         let parsed = parse_window_title("1409.flp* - FL Studio 2025").unwrap();
         assert_eq!(parsed.version, Some("2025".to_string()));
         assert_eq!(parsed.project, Some("1409.flp".to_string()));
@@ -573,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_title_new_format_different_project() {
+    fn parse_title_2025_different_project() {
         let parsed = parse_window_title("tras.flp - FL Studio 2025").unwrap();
         assert_eq!(parsed.version, Some("2025".to_string()));
         assert_eq!(parsed.project, Some("tras.flp".to_string()));
@@ -581,95 +530,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_title_new_format_unsaved_with_different_name() {
+    fn parse_title_2025_unsaved_with_different_name() {
         let parsed = parse_window_title("my_song.flp* - FL Studio 2025").unwrap();
         assert_eq!(parsed.project, Some("my_song.flp".to_string()));
         assert!(parsed.has_unsaved_changes);
-    }
-
-    // -- extract_project tests -------------------------------------------------
-
-    #[test]
-    fn extract_project_old_format() {
-        assert_eq!(
-            extract_project("FL Studio 20 - [song.flp]"),
-            Some("song.flp".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_project_old_format_unsaved() {
-        assert_eq!(
-            extract_project("FL Studio 20 - [song.flp*]"),
-            Some("song.flp".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_project_new_format() {
-        assert_eq!(
-            extract_project("1409.flp - FL Studio 2025"),
-            Some("1409.flp".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_project_new_format_unsaved() {
-        assert_eq!(
-            extract_project("1409.flp* - FL Studio 2025"),
-            Some("1409.flp".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_project_no_project_old_format() {
-        assert_eq!(extract_project("FL Studio 20"), None);
-    }
-
-    #[test]
-    fn extract_project_no_project_new_format() {
-        assert_eq!(extract_project("FL Studio 2025"), None);
-    }
-
-    // -- has_unsaved_changes tests --------------------------------------------
-
-    #[test]
-    fn unsaved_old_format() {
-        assert!(has_unsaved_changes("FL Studio 20 - [song.flp*]"));
-        assert!(!has_unsaved_changes("FL Studio 20 - [song.flp]"));
-    }
-
-    #[test]
-    fn unsaved_new_format() {
-        assert!(has_unsaved_changes("song.flp* - FL Studio 2025"));
-        assert!(!has_unsaved_changes("song.flp - FL Studio 2025"));
-    }
-
-    // -- is_main_window_title tests --------------------------------------------
-
-    #[test]
-    fn is_main_window_title_old_format() {
-        assert!(is_main_window_title("FL Studio 20"));
-        assert!(is_main_window_title("FL Studio 20 - [song.flp]"));
-    }
-
-    #[test]
-    fn is_main_window_title_new_format() {
-        assert!(is_main_window_title("FL Studio 2025"));
-        assert!(is_main_window_title("1409.flp - FL Studio 2025"));
-        assert!(is_main_window_title("song.flp* - FL Studio 2025"));
-    }
-
-    #[test]
-    fn is_main_window_title_accepts_fl_studio_in_title() {
-        // is_main_window_title is a secondary check — it verifies the title
-        // contains "FL Studio". Primary filtering by class name
-        // (TFruityLoopsMainForm vs TWelcomeWizard) happens in enum_callback.
-        assert!(is_main_window_title("FL Studio 2025"));
-        assert!(is_main_window_title("1409.flp - FL Studio 2025"));
-        // "Welcome to FL Studio" also contains "FL Studio" but has a different
-        // class name (TWelcomeWizard), so it's excluded by the class name filter.
-        assert!(is_main_window_title("Welcome to FL Studio"));
     }
 
     // -- Activity mapping tests ------------------------------------------------

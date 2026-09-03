@@ -15,6 +15,6 @@ discord = true
 discord_app_id = 1533559059125637311
 
 [outputs.discord_apps]
-"FL Studio" = 1537238265537634457
-"OpenCode" = 1538988824623972492
+"FL Studio" = 1192880494086455357
+"OpenCode" = 1273940066603106328
 "Antigravity" = 1440730997460172810

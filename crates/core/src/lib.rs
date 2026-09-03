@@ -20,10 +20,12 @@
 //! | [`context`] | Application context ([`ApplicationContext`]) |
 //! | [`activity`] | Activity model ([`Activity`], [`ActivityTimestamps`]) |
 //! | [`presence`] | Rich Presence model ([`RichPresence`]) |
+//! | [`process`] | Process start-time lookup ([`process_start_unix`]) |
 
 pub mod activity;
 pub mod output;
 pub mod presence;
+pub mod process;
 
 mod config;
 mod context;
