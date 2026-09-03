@@ -1,13 +1,48 @@
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
+  font-family: "Segoe UI", Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
   font-weight: 400;
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+  color-scheme: dark;
+
+  /* Design tokens */
+  --bg: #141518;
+  --surface: #1c1e23;
+  --surface-2: #23262d;
+  --border: #2c3038;
+  --text: #e8eaf0;
+  --muted: #9aa0ae;
+  --accent: #5865f2;
+  --success: #3ba55d;
+  --warning: #d9a13b;
+  --error: #ed4245;
+
+  --radius: 8px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  color: var(--text);
+  background-color: var(--bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  overflow: hidden;
 }

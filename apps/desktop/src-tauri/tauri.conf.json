@@ -13,8 +13,11 @@
     "windows": [
       {
         "title": "PresenceHub",
-        "width": 800,
+        "width": 420,
         "height": 600,
+        "minWidth": 360,
+        "minHeight": 500,
+        "center": true,
         "resizable": true,
         "fullscreen": false
       }

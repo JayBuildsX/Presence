@@ -229,6 +229,11 @@ pub enum ConfigError {
     /// does not match the expected schema.
     #[error("Failed to parse config file: {0}")]
     Parse(#[from] toml::de::Error),
+
+    /// Returned when the configuration cannot be serialized back to TOML
+    /// (e.g. when persisting a GUI-driven plugin toggle).
+    #[error("Failed to serialize config file: {0}")]
+    Serialize(#[from] toml::ser::Error),
 }
 
 /// Runtime configuration for PresenceHub.
@@ -309,6 +314,23 @@ impl Config {
         let content = std::fs::read_to_string(path.as_ref())?;
         let config: Self = toml::from_str(&content)?;
         Ok(config)
+    }
+
+    /// Persists the configuration back to a TOML file at the given path.
+    ///
+    /// Used by the desktop GUI to persist plugin enable/disable toggles.
+    /// The file is rewritten from the in-memory value, so hand-written
+    /// comments are not preserved.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Io`] if the file cannot be written.
+    /// Returns [`ConfigError::Serialize`] if the value cannot be
+    /// serialized to TOML.
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<(), ConfigError> {
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(path.as_ref(), content)?;
+        Ok(())
     }
 }
 
@@ -572,6 +594,22 @@ mod tests {
         assert_eq!(config.config_version, 2);
         assert_eq!(config.log_level, "debug");
         assert_eq!(config.runtime.poll_interval_ms, 300);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn config_save_round_trips_plugin_toggles() {
+        // The GUI persists plugin toggles by rewriting the config file.
+        let path = std::env::temp_dir().join("test_presencehub_save_config.toml");
+        let mut config = Config::default();
+        config.plugins.flstudio = false;
+        config.save(&path).unwrap();
+
+        let reloaded = Config::load(&path).unwrap();
+        assert!(!reloaded.plugins.flstudio);
+        assert!(reloaded.plugins.antigravity);
+        assert!(reloaded.plugins.opencode);
 
         std::fs::remove_file(&path).unwrap();
     }

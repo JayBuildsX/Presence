@@ -251,6 +251,9 @@ pub trait Plugin: Send + Sync {
 pub struct PluginHost {
     /// The registered plugins, owned by the host.
     plugins: Vec<Box<dyn Plugin>>,
+    /// Sources disabled at runtime (e.g. through the desktop GUI). Disabled
+    /// plugins stay registered but are never polled.
+    disabled: std::collections::HashSet<String>,
 }
 
 impl PluginHost {
@@ -261,6 +264,7 @@ impl PluginHost {
     pub fn new() -> Self {
         Self {
             plugins: Vec::new(),
+            disabled: std::collections::HashSet::new(),
         }
     }
 
@@ -284,6 +288,25 @@ impl PluginHost {
     /// taking ownership or modifying them.
     pub fn plugins(&self) -> &[Box<dyn Plugin>] {
         &self.plugins
+    }
+
+    /// Disables or re-enables a registered source.
+    ///
+    /// A disabled source stays registered but is skipped by
+    /// [`poll_all`](PluginHost::poll_all): its `poll` is never called.
+    /// Used by the desktop GUI toggle; the runtime additionally ends the
+    /// source's engine session so the display falls back immediately.
+    pub fn set_source_disabled(&mut self, source: &str, disabled: bool) {
+        if disabled {
+            self.disabled.insert(source.to_string());
+        } else {
+            self.disabled.remove(source);
+        }
+    }
+
+    /// Whether the given source is currently disabled.
+    pub fn is_source_disabled(&self, source: &str) -> bool {
+        self.disabled.contains(source)
     }
 
     /// Initializes all registered plugins.
@@ -345,7 +368,10 @@ impl PluginHost {
     /// Polls all registered plugins in registration order.
     ///
     /// Calls [`Plugin::poll`] on each plugin. A failing plugin does
-    /// not prevent other plugins from being polled.
+    /// not prevent other plugins from being polled. Sources disabled via
+    /// [`set_source_disabled`](PluginHost::set_source_disabled) are
+    /// skipped entirely: their `poll` is never called and they produce no
+    /// result entry.
     ///
     /// Returns a vector of `(source, result)` pairs in registration
     /// order. `source` is the plugin's metadata name and identifies
@@ -355,33 +381,37 @@ impl PluginHost {
     /// - `Ok(None)` — the plugin's state is unchanged
     /// - `Err(error)` — the plugin failed to poll
     pub fn poll_all(&mut self) -> Vec<(String, Result<Option<Activity>, PluginError>)> {
-        self.plugins
-            .iter_mut()
-            .map(|plugin| {
-                let name = plugin.metadata().name.clone();
-                debug!(plugin = %name, "PluginHost polling plugin");
-                match plugin.poll() {
-                    Ok(Some(activity)) => {
-                        debug!(
-                            plugin = %name,
-                            state = %activity.state,
-                            details = ?activity.details,
-                            metadata = ?activity.metadata,
-                            "Plugin returned Ok(Some(Activity))"
-                        );
-                        (name, Ok(Some(activity)))
-                    }
-                    Ok(None) => {
-                        debug!(plugin = %name, "Plugin returned Ok(None)");
-                        (name, Ok(None))
-                    }
-                    Err(e) => {
-                        debug!(plugin = %name, error = %e, "Plugin returned Err");
-                        (name, Err(e))
-                    }
+        let mut results = Vec::new();
+        for plugin in self.plugins.iter_mut() {
+            let name = plugin.metadata().name.clone();
+            if self.disabled.contains(&name) {
+                debug!(plugin = %name, "PluginHost skipping disabled plugin");
+                continue;
+            }
+            debug!(plugin = %name, "PluginHost polling plugin");
+            let result = match plugin.poll() {
+                Ok(Some(activity)) => {
+                    debug!(
+                        plugin = %name,
+                        state = %activity.state,
+                        details = ?activity.details,
+                        metadata = ?activity.metadata,
+                        "Plugin returned Ok(Some(Activity))"
+                    );
+                    (name, Ok(Some(activity)))
                 }
-            })
-            .collect()
+                Ok(None) => {
+                    debug!(plugin = %name, "Plugin returned Ok(None)");
+                    (name, Ok(None))
+                }
+                Err(e) => {
+                    debug!(plugin = %name, error = %e, "Plugin returned Err");
+                    (name, Err(e))
+                }
+            };
+            results.push(result);
+        }
+        results
     }
 }
 
@@ -707,5 +737,61 @@ mod tests {
     fn host_is_sync() {
         fn assert_sync<T: Sync>() {}
         assert_sync::<PluginHost>();
+    }
+
+    #[test]
+    fn disabled_source_is_skipped_by_poll_all() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct CountingPlugin {
+            metadata: PluginMetadata,
+            polls: Arc<AtomicUsize>,
+        }
+        impl Plugin for CountingPlugin {
+            fn metadata(&self) -> &PluginMetadata {
+                &self.metadata
+            }
+            fn init(&mut self) -> Result<(), PluginError> {
+                Ok(())
+            }
+            fn poll(&mut self) -> Result<Option<Activity>, PluginError> {
+                self.polls.fetch_add(1, Ordering::SeqCst);
+                Ok(None)
+            }
+            fn shutdown(&mut self) -> Result<(), PluginError> {
+                Ok(())
+            }
+        }
+
+        let polls_a = Arc::new(AtomicUsize::new(0));
+        let polls_b = Arc::new(AtomicUsize::new(0));
+        let mut host = PluginHost::new();
+        host.register(Box::new(CountingPlugin {
+            metadata: PluginMetadata::new("A", "1.0.0"),
+            polls: polls_a.clone(),
+        }));
+        host.register(Box::new(CountingPlugin {
+            metadata: PluginMetadata::new("B", "1.0.0"),
+            polls: polls_b.clone(),
+        }));
+
+        host.set_source_disabled("A", true);
+        assert!(host.is_source_disabled("A"));
+        assert!(!host.is_source_disabled("B"));
+
+        let results = host.poll_all();
+        assert_eq!(results.len(), 1, "disabled source produces no entry");
+        assert_eq!(results[0].0, "B");
+        assert_eq!(
+            polls_a.load(Ordering::SeqCst),
+            0,
+            "disabled poll never runs"
+        );
+        assert_eq!(polls_b.load(Ordering::SeqCst), 1);
+
+        host.set_source_disabled("A", false);
+        let results = host.poll_all();
+        assert_eq!(results.len(), 2, "re-enabled source is polled again");
     }
 }

@@ -288,6 +288,10 @@ impl Output for DiscordOutput {
             }
         }
     }
+
+    fn connection_state(&self) -> Option<bool> {
+        Some(self.is_connected())
+    }
 }
 
 // ---------------------------------------------------------------------------

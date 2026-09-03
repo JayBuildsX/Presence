@@ -27,6 +27,7 @@
 //! All construction is delegated to [`PluginRegistry`] and [`OutputRegistry`].
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -62,6 +63,17 @@ pub struct Runtime {
     poll_interval: Duration,
     /// The configuration used to construct this runtime.
     config: Config,
+    /// Global pause flag (GUI). While paused the loop sleeps without
+    /// polling, and outputs were cleared on pause so nothing stale shows.
+    /// Sessions and plugin state are preserved across the pause.
+    paused: bool,
+    /// Filesystem path of the loaded configuration, used to persist GUI
+    /// plugin toggles. `None` when no config file was found.
+    config_path: Option<PathBuf>,
+    /// Per-source poll outcome tracker (transition-based log warnings).
+    /// Stored on the runtime so single poll iterations can run outside
+    /// [`run`](Runtime::run) (e.g. from the GUI thread).
+    poll_errors: PollErrorTracker,
 }
 
 // ---------------------------------------------------------------------------
@@ -135,13 +147,16 @@ impl Runtime {
             running: Arc::new(AtomicBool::new(false)),
             poll_interval,
             config,
+            paused: false,
+            config_path: None,
+            poll_errors: PollErrorTracker::default(),
         }
     }
 
     /// Returns a clone of the running flag.
     ///
-    /// This can be used to stop the runtime from another thread
-    /// (e.g. a Ctrl+C handler).
+    /// This can be used to stop the runtime from another thread.
+    #[allow(dead_code)]
     pub fn stop_signal(&self) -> Arc<AtomicBool> {
         self.running.clone()
     }
@@ -198,6 +213,16 @@ impl Runtime {
         }
         info!("Plugin initialization complete");
 
+        // 4b. Apply config-driven disable flags so plugins disabled in
+        // presencehub.toml are never polled, exactly like GUI toggles.
+        for (source, enabled) in [
+            ("FL Studio", self.config.plugins.flstudio),
+            ("Antigravity", self.config.plugins.antigravity),
+            ("OpenCode", self.config.plugins.opencode),
+        ] {
+            self.host.set_source_disabled(source, !enabled);
+        }
+
         // 5. Create enabled outputs via OutputRegistry
         let outputs = OutputRegistry::create_enabled_outputs(&self.config);
         info!("OutputRegistry created {} output(s)", outputs.len());
@@ -227,8 +252,10 @@ impl Runtime {
 
     /// Run the main polling loop.
     ///
-    /// Continuously polls all plugins through PluginHost and forwards
-    /// activities to the PresenceEngine. This is a blocking call.
+    /// Continuously runs single poll iterations through [`poll_once`](Runtime::poll_once).
+    /// This is a blocking call. The desktop GUI drives [`poll_once`](Runtime::poll_once)
+    /// directly from its background task instead.
+    #[allow(dead_code)]
     pub fn run(&mut self) {
         if !self.running.load(Ordering::SeqCst) {
             warn!("Runtime not started, call start() before run()");
@@ -237,58 +264,207 @@ impl Runtime {
 
         info!("Entering polling loop (interval: {:?})", self.poll_interval);
 
-        // Track poll outcomes per source so availability warnings and
-        // recovery notices are logged on transitions, not on every cycle.
-        let mut poll_errors = PollErrorTracker::default();
-
         while self.running.load(Ordering::SeqCst) {
-            let plugin_count = self.host.plugins().len();
-            debug!(plugins = plugin_count, "Poll iteration");
-
-            // Resolve the OS foreground window to a registered source using
-            // the plugins' declared window identities. Generic: the runtime
-            // never names a concrete application.
-            let foreground_sources: Vec<(String, WindowIdentity)> = self
-                .host
-                .plugins()
-                .iter()
-                .filter_map(|plugin| {
-                    let identity = plugin.window_identity()?;
-                    Some((plugin.metadata().name.clone(), identity))
-                })
-                .collect();
-
-            let foreground_source = foreground::foreground_window().and_then(|window| {
-                let sources: Vec<(&str, &WindowIdentity)> = foreground_sources
-                    .iter()
-                    .map(|(name, identity)| (name.as_str(), identity))
-                    .collect();
-                foreground::resolve_foreground_source(&window, &sources).map(str::to_string)
-            });
-
-            let foreground_errors = self
-                .engine
-                .set_foreground_source(foreground_source.as_deref());
-            if !foreground_errors.is_empty() {
-                for (index, err) in &foreground_errors {
-                    warn!(
-                        "Output {} failed to publish foreground change: {}",
-                        index, err
-                    );
-                }
-            }
-
-            // Poll every registered plugin through PluginHost.
-            // Results are tagged with the plugin's source name so each
-            // plugin's session can be routed independently.
-            for (source, result) in self.host.poll_all() {
-                self.handle_poll_result(&mut poll_errors, source, result);
-            }
-
+            self.poll_once();
             std::thread::sleep(self.poll_interval);
         }
 
         info!("Polling loop exited");
+    }
+
+    /// Run a single poll iteration.
+    ///
+    /// Resolves the foreground source, polls every enabled plugin, and
+    /// routes results to the PresenceEngine. While paused this is a no-op:
+    /// nothing is polled and no session is touched, so resume continues
+    /// exactly where the pause began. Extracted from [`run`](Runtime::run)
+    /// so embedders (e.g. the GUI thread) can drive polling without taking
+    /// over the blocking loop.
+    pub fn poll_once(&mut self) {
+        if self.paused {
+            return;
+        }
+
+        // Take the tracker for the iteration so `handle_poll_result` keeps
+        // its signature; it is restored before returning.
+        let mut poll_errors = std::mem::take(&mut self.poll_errors);
+
+        let plugin_count = self.host.plugins().len();
+        debug!(plugins = plugin_count, "Poll iteration");
+
+        // Resolve the OS foreground window to a registered source using
+        // the plugins' declared window identities. Generic: the runtime
+        // never names a concrete application.
+        let foreground_sources: Vec<(String, WindowIdentity)> = self
+            .host
+            .plugins()
+            .iter()
+            .filter_map(|plugin| {
+                let identity = plugin.window_identity()?;
+                Some((plugin.metadata().name.clone(), identity))
+            })
+            .collect();
+
+        let foreground_source = foreground::foreground_window().and_then(|window| {
+            let sources: Vec<(&str, &WindowIdentity)> = foreground_sources
+                .iter()
+                .map(|(name, identity)| (name.as_str(), identity))
+                .collect();
+            foreground::resolve_foreground_source(&window, &sources).map(str::to_string)
+        });
+
+        let foreground_errors = self
+            .engine
+            .set_foreground_source(foreground_source.as_deref());
+        if !foreground_errors.is_empty() {
+            for (index, err) in &foreground_errors {
+                warn!(
+                    "Output {} failed to publish foreground change: {}",
+                    index, err
+                );
+            }
+        }
+
+        // Poll every registered plugin through PluginHost.
+        // Results are tagged with the plugin's source name so each
+        // plugin's session can be routed independently. Sources disabled
+        // through the GUI are skipped by PluginHost itself.
+        for (source, result) in self.host.poll_all() {
+            self.handle_poll_result(&mut poll_errors, source, result);
+        }
+
+        self.poll_errors = poll_errors;
+    }
+
+    /// The polling interval between iterations.
+    pub fn poll_interval(&self) -> Duration {
+        self.poll_interval
+    }
+
+    /// Whether the runtime is globally paused (GUI).
+    #[allow(dead_code)]
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Whether the named plugin source is currently enabled.
+    #[allow(dead_code)]
+    pub fn is_plugin_enabled(&self, source: &str) -> bool {
+        !self.host.is_source_disabled(source)
+    }
+
+    /// Builds the GUI view model from current backend state.
+    ///
+    /// Plugin rows come from the configuration (so disabled plugins are
+    /// always listed); activity, ownership, and connection status come
+    /// from the presence engine and its outputs. The frontend renders
+    /// this verbatim and never reconstructs backend state.
+    pub fn snapshot(&self) -> crate::state::LiveState {
+        use crate::state::{LiveState, PluginView, PresenceView};
+
+        let plugins = ["FL Studio", "Antigravity", "OpenCode"]
+            .into_iter()
+            .map(|name| {
+                let enabled = match name {
+                    "FL Studio" => self.config.plugins.flstudio,
+                    "Antigravity" => self.config.plugins.antigravity,
+                    "OpenCode" => self.config.plugins.opencode,
+                    _ => false,
+                } && !self.host.is_source_disabled(name);
+                let summary = self
+                    .engine
+                    .source_activity(name)
+                    .map(|activity| activity.state.clone());
+                PluginView {
+                    name: name.to_string(),
+                    enabled,
+                    active: self.engine.is_source_active(name),
+                    summary,
+                }
+            })
+            .collect();
+
+        let owner = self.engine.displayed_source().map(str::to_owned);
+        let current = owner.as_deref().and_then(|source| {
+            self.engine.current_activity().map(|activity| PresenceView {
+                source: source.to_string(),
+                state: activity.state.clone(),
+                details: activity.details.clone(),
+            })
+        });
+
+        LiveState {
+            paused: self.paused,
+            discord_connected: self.engine.any_output_connected(),
+            owner,
+            current,
+            plugins,
+        }
+    }
+
+    /// Records where the configuration was loaded from, so GUI toggles can
+    /// be persisted back to the same file.
+    pub fn set_config_path(&mut self, path: Option<PathBuf>) {
+        self.config_path = path;
+    }
+
+    /// Enables or disables a plugin at runtime (GUI toggle).
+    ///
+    /// Disabling marks the source skipped so its `poll` is never called,
+    /// and ends its engine session so the display falls back to the
+    /// remaining plugins. Enabling clears the skip so the next poll detects
+    /// the application immediately. The change is applied to the in-memory
+    /// configuration and persisted to the config file when its path is
+    /// known; a persistence failure is returned as an error string while
+    /// the in-memory state stays applied.
+    pub fn set_plugin_enabled(&mut self, source: &str, enabled: bool) -> Result<(), String> {
+        match source {
+            "FL Studio" => self.config.plugins.flstudio = enabled,
+            "Antigravity" => self.config.plugins.antigravity = enabled,
+            "OpenCode" => self.config.plugins.opencode = enabled,
+            unknown => return Err(format!("Unknown plugin: {unknown}")),
+        }
+
+        self.host.set_source_disabled(source, !enabled);
+        if enabled {
+            info!(source = %source, "Plugin enabled");
+        } else {
+            self.engine.end_session(source);
+            info!(source = %source, "Plugin disabled");
+        }
+
+        if let Some(path) = self.config_path.clone() {
+            self.config
+                .save(&path)
+                .map_err(|e| format!("Failed to persist configuration: {e}"))?;
+        }
+        Ok(())
+    }
+
+    /// Pauses or resumes the whole runtime (GUI control).
+    ///
+    /// Pausing clears every output so no stale presence remains, but keeps
+    /// all sessions, plugin state, and configuration untouched — pause is
+    /// not "disable every plugin". Resuming republishes the currently
+    /// displayed activity so Discord recovers immediately with its original
+    /// session timer intact.
+    pub fn set_paused(&mut self, paused: bool) {
+        if self.paused == paused {
+            return;
+        }
+        self.paused = paused;
+        if paused {
+            info!("PresenceHub paused");
+            self.engine.clear_outputs();
+        } else {
+            info!("PresenceHub resumed");
+            if let (Some(source), Some(activity)) = (
+                self.engine.displayed_source().map(str::to_owned),
+                self.engine.current_activity().cloned(),
+            ) {
+                let _ = self.engine.publish_now(&source, &activity);
+            }
+        }
     }
 
     /// Handle a single plugin poll result.
@@ -1351,5 +1527,79 @@ mod tests {
             "one recovery logged across the real poll loop; logs:\n{}",
             logs
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // GUI controls: enable/disable and pause
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_plugin_enabled_rejects_unknown_plugin() {
+        let mut runtime = Runtime::new();
+        assert!(runtime.set_plugin_enabled("League", true).is_err());
+        assert!(runtime.set_plugin_enabled("", false).is_err());
+    }
+
+    #[test]
+    fn disable_plugin_stops_polling_and_clears_session() {
+        let mut runtime = Runtime::new();
+        runtime
+            .host
+            .register(Box::new(MockActivityPlugin::new("FL Studio")));
+
+        // First poll publishes.
+        runtime.poll_once();
+        assert!(runtime.engine.current_activity().is_some());
+
+        // Disable: session ends immediately and future polls skip the plugin.
+        assert!(runtime.set_plugin_enabled("FL Studio", false).is_ok());
+        assert!(!runtime.is_plugin_enabled("FL Studio"));
+        assert!(!runtime.config.plugins.flstudio);
+        assert!(runtime.engine.current_activity().is_none());
+
+        runtime.poll_once();
+        assert!(runtime.engine.current_activity().is_none());
+
+        // Re-enable: the next poll detects the application again.
+        assert!(runtime.set_plugin_enabled("FL Studio", true).is_ok());
+        assert!(runtime.is_plugin_enabled("FL Studio"));
+        assert!(runtime.config.plugins.flstudio);
+    }
+
+    #[test]
+    fn pause_skips_polling_but_preserves_session() {
+        let mut runtime = Runtime::new();
+        runtime
+            .host
+            .register(Box::new(MockActivityPlugin::new("A")));
+
+        runtime.poll_once();
+        assert!(runtime.engine.current_activity().is_some());
+        assert!(!runtime.is_paused());
+
+        // Pause: polling stops but the session survives.
+        runtime.set_paused(true);
+        assert!(runtime.is_paused());
+        runtime.poll_once();
+        assert!(
+            runtime.engine.current_activity().is_some(),
+            "pause must not end the session"
+        );
+        assert!(runtime.engine.session_started_at().is_some());
+
+        // Resume republishes the preserved session.
+        runtime.set_paused(false);
+        assert!(!runtime.is_paused());
+        assert!(runtime.engine.current_activity().is_some());
+    }
+
+    #[test]
+    fn set_paused_is_idempotent() {
+        let mut runtime = Runtime::new();
+        runtime.set_paused(false);
+        assert!(!runtime.is_paused());
+        runtime.set_paused(true);
+        runtime.set_paused(true);
+        assert!(runtime.is_paused());
     }
 }

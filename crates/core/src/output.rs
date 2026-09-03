@@ -62,6 +62,16 @@ pub trait Output: Send {
     /// The default implementation is a no-op. Outputs that hold
     /// externally-visible state should override this.
     fn clear(&mut self) {}
+
+    /// Reports whether this output currently holds a live connection, when
+    /// the concept applies.
+    ///
+    /// Returns `None` for outputs where connection state is meaningless
+    /// (e.g. console logging). The desktop GUI uses this to display Discord
+    /// connection status without knowing anything about Discord.
+    fn connection_state(&self) -> Option<bool> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +372,16 @@ impl PresenceEngine {
         self.foreground = None;
         self.displayed = None;
         self.recency = 0;
+        self.clear_outputs();
+    }
+
+    /// Clears every registered output without touching sessions.
+    ///
+    /// Unlike [`clear`](PresenceEngine::clear), sessions, timers, and the
+    /// display owner are preserved. Used by the GUI pause control so
+    /// Discord shows nothing while paused yet resume continues exactly
+    /// where the pause began.
+    pub fn clear_outputs(&mut self) {
         for output in self.outputs.iter_mut() {
             output.clear();
         }
@@ -489,8 +509,37 @@ impl PresenceEngine {
     ///
     /// The owner is chosen by the configured ownership policy, recomputed
     /// whenever a session ends, a source updates, or the foreground changes.
-    fn displayed_source(&self) -> Option<&str> {
+    /// The desktop GUI uses this to show which plugin owns the presence.
+    pub fn displayed_source(&self) -> Option<&str> {
         self.displayed.as_deref()
+    }
+
+    /// Whether the given source currently has an active session.
+    ///
+    /// Used by the desktop GUI to distinguish enabled-but-inactive plugins
+    /// from enabled-and-active ones.
+    pub fn is_source_active(&self, source: &str) -> bool {
+        self.is_active(source)
+    }
+
+    /// The stored activity for a source, if it has published one.
+    ///
+    /// Used by the desktop GUI for per-plugin activity summaries. The
+    /// returned activity carries the engine-stamped session start time.
+    pub fn source_activity(&self, source: &str) -> Option<&Activity> {
+        self.sessions
+            .get(source)
+            .and_then(|session| session.current.as_ref())
+    }
+
+    /// Whether any registered output currently reports a live connection.
+    ///
+    /// Used by the desktop GUI for connection status. Outputs for which
+    /// connection state is meaningless report `None` and are ignored.
+    pub fn any_output_connected(&self) -> bool {
+        self.outputs
+            .iter()
+            .any(|output| output.connection_state() == Some(true))
     }
 
     /// Recomputes the display owner and reconciles the outputs.
@@ -1256,6 +1305,86 @@ mod tests {
         assert!(engine.current_activity().is_none());
         // Outputs stay registered so a subsequent session can publish again.
         assert_eq!(engine.outputs.len(), 2);
+    }
+
+    #[test]
+    fn engine_clear_outputs_preserves_sessions() {
+        // The GUI pause control clears outputs without ending sessions:
+        // timers, the display owner, and stored activities must survive.
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::Arc;
+
+        struct TrackingOutput {
+            clear_count: Arc<AtomicUsize>,
+        }
+        impl Output for TrackingOutput {
+            fn publish(&mut self, _source: &str, _activity: &Activity) -> Result<(), OutputError> {
+                Ok(())
+            }
+            fn clear(&mut self) {
+                self.clear_count.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let clear_count = Arc::new(AtomicUsize::new(0));
+        let mut engine = PresenceEngine::new();
+        engine.register_output(Box::new(TrackingOutput {
+            clear_count: clear_count.clone(),
+        }));
+
+        let activity = Activity {
+            state: "Editing".to_string(),
+            details: None,
+            timestamps: None,
+            metadata: HashMap::new(),
+            application: None,
+        };
+        engine.update("A", &activity);
+        let started = engine.session_started_at().expect("session should start");
+
+        engine.clear_outputs();
+        assert_eq!(
+            clear_count.load(Ordering::SeqCst),
+            1,
+            "clear_outputs() must clear every registered output"
+        );
+        assert!(
+            engine.current_activity().is_some(),
+            "sessions must survive clear_outputs()"
+        );
+        assert_eq!(
+            engine.session_started_at(),
+            Some(started),
+            "session timers must survive clear_outputs()"
+        );
+        assert_eq!(engine.displayed_source(), Some("A"));
+    }
+
+    #[test]
+    fn engine_displayed_source_and_activity_getters() {
+        let mut engine = PresenceEngine::new();
+        assert_eq!(engine.displayed_source(), None);
+        assert!(!engine.is_source_active("A"));
+        assert!(engine.source_activity("A").is_none());
+        assert!(!engine.any_output_connected());
+
+        let activity = Activity {
+            state: "Editing".to_string(),
+            details: None,
+            timestamps: None,
+            metadata: HashMap::new(),
+            application: None,
+        };
+        engine.update("A", &activity);
+
+        assert_eq!(engine.displayed_source(), Some("A"));
+        assert!(engine.is_source_active("A"));
+        assert!(!engine.is_source_active("B"));
+        assert_eq!(
+            engine.source_activity("A").map(|a| a.state.as_str()),
+            Some("Editing")
+        );
+        assert!(engine.source_activity("B").is_none());
     }
 
     #[test]

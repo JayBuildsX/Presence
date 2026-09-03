@@ -3,33 +3,34 @@
 //! Entry point for the Tauri-based desktop application.
 //! The runtime is initialized and started here.
 
+mod commands;
 mod foreground;
 mod registry;
 mod runtime;
+mod state;
 
 use presencehub_core::Config;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tauri::Manager;
 use tracing::{info, warn};
+
+use state::AppState;
 
 /// File name of the desktop configuration file.
 const CONFIG_FILE_NAME: &str = "presencehub.toml";
 
 /// Run the PresenceHub desktop application.
 ///
-/// This is the main entry point called from `main.rs`.
-/// It loads configuration, initializes the runtime, and enters
-/// the polling loop.
-///
-/// # Configuration
-///
-/// Configuration is resolved deterministically relative to the executable
-/// (see [`resolve_config_path`]); if the file is missing or invalid, default
-/// configuration is used.
+/// Loads configuration, starts the runtime, then opens the GUI window and
+/// drives polling on a background task. The frontend talks to the backend
+/// exclusively through Tauri commands (`get_state`, `set_plugin_enabled`,
+/// `set_paused`); the backend remains authoritative for all state.
 ///
 /// # Shutdown
 ///
-/// Press Ctrl+C to gracefully shut down the application.
-/// The runtime will stop polling, shut down plugins, and exit.
+/// Closing the window ends the Tauri event loop, after which the runtime
+/// is shut down so every output (notably Discord) is cleared.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize tracing subscriber for logging.
@@ -73,27 +74,55 @@ pub fn run() {
 
     // Create and configure the runtime
     let mut runtime = runtime::Runtime::with_config(config);
+    runtime.set_config_path(resolve_config_path());
 
     // Start the runtime
     if let Err(e) = runtime.start() {
         eprintln!("Failed to start PresenceHub runtime: {}", e);
-        return;
     }
 
-    // Set up Ctrl+C handler for graceful shutdown
-    let stop_signal = runtime.stop_signal();
-    ctrlc::set_handler(move || {
-        eprintln!("\nReceived Ctrl+C, shutting down...");
-        stop_signal.store(false, std::sync::atomic::Ordering::SeqCst);
-    })
-    .ok();
+    let state = AppState {
+        runtime: Arc::new(tokio::sync::Mutex::new(runtime)),
+    };
 
-    // Run the main polling loop (blocks until stopped)
-    runtime.run();
-
-    // Shutdown gracefully
-    runtime.shutdown();
-    info!("PresenceHub exited");
+    tauri::Builder::default()
+        .manage(state)
+        .invoke_handler(tauri::generate_handler![
+            commands::get_state,
+            commands::set_plugin_enabled,
+            commands::set_paused,
+        ])
+        .setup(|app| {
+            // Drive polling on a background task; each iteration locks the
+            // runtime briefly so GUI commands interleave between polls.
+            let state = app.state::<AppState>().inner().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    let interval = {
+                        let mut runtime = state.runtime.lock().await;
+                        if !runtime.is_running() {
+                            break;
+                        }
+                        runtime.poll_once();
+                        runtime.poll_interval()
+                    };
+                    tokio::time::sleep(interval).await;
+                }
+            });
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("failed to build PresenceHub window")
+        .run(|app, event| {
+            // Synchronous shutdown on exit so Discord presence is cleared.
+            if let tauri::RunEvent::Exit = event {
+                let state = app.state::<AppState>();
+                tauri::async_runtime::block_on(async {
+                    state.runtime.lock().await.shutdown();
+                });
+                info!("PresenceHub exited");
+            }
+        });
 }
 
 /// Resolve the configuration file path for the desktop application.
