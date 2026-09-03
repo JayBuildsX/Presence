@@ -65,4 +65,3 @@ pub async fn drag_window(window: tauri::Window) -> Result<(), String> {
 pub async fn close_window(window: tauri::Window) -> Result<(), String> {
     window.close().map_err(|e| e.to_string())
 }
-
