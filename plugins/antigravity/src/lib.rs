@@ -176,6 +176,7 @@ impl Plugin for AntigravityPlugin {
                 },
                 None => AntigravityState::default(),
             };
+            state.project_name = conv.project_name.clone();
             state.is_agent_working = true;
             state
         } else {
@@ -204,16 +205,35 @@ pub fn build_activity(state: &AntigravityState, start_timestamp: i64) -> Activit
         );
         metadata.insert("small_text".to_string(), ASSET_SMALL_TEXT_AGENT.to_string());
 
-        let st = state
-            .task_name
-            .clone()
-            .unwrap_or_else(|| "Agent Active".to_string());
-        let dt = state
-            .active_task
-            .clone()
-            .or_else(|| Some("Agent Working".to_string()));
+        if let Some(ref project) = state.project_name {
+            let st = state
+                .active_task
+                .as_ref()
+                .or(state.task_name.as_ref())
+                .cloned()
+                .unwrap_or_else(|| "Agent Active".to_string());
+            (st, Some(format!("Project: {}", project)))
+        } else {
+            let st = state
+                .task_name
+                .clone()
+                .unwrap_or_else(|| "Agent Active".to_string());
+            let mut dt = state
+                .active_task
+                .clone()
+                .or_else(|| Some("Agent Working".to_string()));
 
-        (st, dt)
+            // Never allow state and details to show identical text
+            if dt.as_ref() == Some(&st) {
+                dt = state
+                    .main_header
+                    .clone()
+                    .filter(|m| m != &st)
+                    .or_else(|| Some("Agent Working".to_string()));
+            }
+
+            (st, dt)
+        }
     } else {
         ("In Antigravity".to_string(), Some("Idle".to_string()))
     };
@@ -264,6 +284,7 @@ mod tests {
             section_header: Some("Feature Implementation".to_string()),
             active_task: Some("Add Antigravity plugin".to_string()),
             task_name: Some("Feature Implementation".to_string()),
+            project_name: None,
             is_agent_working: true,
         };
 
@@ -293,6 +314,7 @@ mod tests {
             section_header: None,
             active_task: None,
             task_name: None,
+            project_name: None,
             is_agent_working: false,
         };
 
@@ -317,6 +339,7 @@ mod tests {
             section_header: None,
             active_task: Some("Task 1".to_string()),
             task_name: Some("Goal".to_string()),
+            project_name: None,
             is_agent_working: true,
         };
 
@@ -330,6 +353,7 @@ mod tests {
             section_header: None,
             active_task: Some("Task 2".to_string()),
             task_name: Some("Goal".to_string()),
+            project_name: None,
             is_agent_working: true,
         };
 
@@ -347,6 +371,7 @@ mod tests {
             section_header: None,
             active_task: Some("Task 1".to_string()),
             task_name: Some("Goal".to_string()),
+            project_name: None,
             is_agent_working: true,
         };
 
@@ -363,5 +388,38 @@ mod tests {
         // Reopened -> emits again
         let reopened = plugin.observe_state(&state).unwrap();
         assert!(reopened.is_some());
+    }
+
+    #[test]
+    fn build_activity_with_project_name() {
+        let state = AntigravityState {
+            main_header: Some("Refactor PresenceHUB".to_string()),
+            section_header: Some("Verification Plan".to_string()),
+            active_task: Some("Verification Plan".to_string()),
+            task_name: Some("Verification Plan".to_string()),
+            project_name: Some("PresenceHUB".to_string()),
+            is_agent_working: true,
+        };
+
+        let activity = build_activity(&state, 1700000000);
+        assert_eq!(activity.state, "Verification Plan");
+        assert_eq!(activity.details.as_deref(), Some("Project: PresenceHUB"));
+    }
+
+    #[test]
+    fn build_activity_never_duplicates_state_and_details() {
+        let state = AntigravityState {
+            main_header: Some("Overall Goal".to_string()),
+            section_header: Some("Step 1".to_string()),
+            active_task: Some("Step 1".to_string()),
+            task_name: Some("Step 1".to_string()),
+            project_name: None,
+            is_agent_working: true,
+        };
+
+        let activity = build_activity(&state, 1700000000);
+        assert_eq!(activity.state, "Step 1");
+        assert_ne!(activity.details.as_deref(), Some("Step 1"));
+        assert_eq!(activity.details.as_deref(), Some("Overall Goal"));
     }
 }

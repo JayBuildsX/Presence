@@ -1,6 +1,7 @@
 import type { LiveState } from "../types";
 import { StatusDot, globalStatus } from "./widgets";
 import { minimizeWindow, closeWindow } from "../api";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 interface HeaderProps {
   state: LiveState;
@@ -19,6 +20,17 @@ export default function Header({
 }: HeaderProps) {
   const status = globalStatus(state);
 
+  const handleMouseDown = (e: React.MouseEvent) => {
+    // Only drag on left click and when not clicking a button or interactive child
+    if (e.button === 0 && (e.target as HTMLElement).closest("button") === null) {
+      try {
+        void getCurrentWindow().startDragging();
+      } catch {
+        // Handled by data-tauri-drag-region
+      }
+    }
+  };
+
   const handleMinimize = () => {
     void minimizeWindow();
   };
@@ -28,14 +40,14 @@ export default function Header({
   };
 
   return (
-    <header className="header" data-tauri-drag-region>
-      <div className="brand" data-tauri-drag-region>
+    <header className="header" data-tauri-drag-region onMouseDown={handleMouseDown}>
+      <div className="brand">
         <div className="brand-mark" aria-hidden="true">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
           </svg>
         </div>
-        <div className="brand-text" data-tauri-drag-region>
+        <div className="brand-text">
           <span className="brand-title">PresenceHub</span>
           <span className="brand-subtitle">Discord Activity</span>
         </div>

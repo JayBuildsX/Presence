@@ -442,7 +442,13 @@ impl Runtime {
         }
 
         // If the plugin was not registered at startup, instantiate and register it now.
-        if enabled && !self.host.plugins().iter().any(|p| p.metadata().name == source) {
+        if enabled
+            && !self
+                .host
+                .plugins()
+                .iter()
+                .any(|p| p.metadata().name == source)
+        {
             let plugin: Box<dyn presencehub_plugin_host::Plugin> = match source {
                 "FL Studio" => Box::new(presencehub_flstudio::FlStudioPlugin::new()),
                 "Antigravity" => Box::new(presencehub_antigravity::AntigravityPlugin::new()),

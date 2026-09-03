@@ -78,6 +78,7 @@ impl PluginRegistry {
     /// The runtime registers all plugins with `PluginHost` and applies
     /// enable/disable flags so plugins can be toggled on and off dynamically
     /// at runtime without needing application restart.
+    #[allow(dead_code)]
     pub fn create_all_plugins() -> Vec<Box<dyn Plugin>> {
         vec![
             Box::new(FlStudioPlugin::new()),

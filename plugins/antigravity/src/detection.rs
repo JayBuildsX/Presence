@@ -63,8 +63,61 @@ pub struct ActiveConversation {
     /// legacy `task.md`), if the conversation has one. Activity alone
     /// (transcripts, logs) still marks the conversation active.
     pub task_file: Option<PathBuf>,
+    /// Project / workspace name associated with this conversation, if found.
+    pub project_name: Option<String>,
     /// Newest activity anywhere inside the conversation directory.
     pub modified: SystemTime,
+}
+
+/// Attempts to resolve the project name for a conversation by inspecting
+/// the corresponding database file in `~/.gemini/antigravity/conversations/<uuid>.db`.
+pub fn resolve_conversation_project(brain_dir: &Path, conversation_id: &str) -> Option<String> {
+    let parent = brain_dir.parent()?;
+    let db_path = parent
+        .join("conversations")
+        .join(format!("{}.db", conversation_id));
+    if db_path.is_file() {
+        if let Ok(bytes) = std::fs::read(&db_path) {
+            return extract_project_from_bytes(&bytes);
+        }
+    }
+    None
+}
+
+/// Scans raw bytes (e.g. from an SQLite database or binary blob) for `file:///` workspace URIs
+/// and extracts the human-readable project directory name.
+pub fn extract_project_from_bytes(bytes: &[u8]) -> Option<String> {
+    let pattern = b"file:///";
+    let mut pos = 0;
+    while let Some(idx) = bytes[pos..]
+        .windows(pattern.len())
+        .position(|w| w == pattern)
+    {
+        let start = pos + idx + pattern.len();
+        let mut end = start;
+        while end < bytes.len()
+            && bytes[end] > 0x20
+            && bytes[end] != b'"'
+            && bytes[end] != b'\''
+            && bytes[end] != 0x7f
+        {
+            end += 1;
+        }
+        if end > start {
+            if let Ok(uri_path) = std::str::from_utf8(&bytes[start..end]) {
+                let clean = uri_path.replace("%3A", ":").replace('\\', "/");
+                let trimmed = clean.trim_end_matches('/');
+                if let Some(project) = trimmed.rsplit('/').next() {
+                    let project = project.trim();
+                    if !project.is_empty() {
+                        return Some(project.to_string());
+                    }
+                }
+            }
+        }
+        pos = start;
+    }
+    None
 }
 
 /// Finds the most recently active conversation in the brain directory.
@@ -108,18 +161,17 @@ pub fn find_active_conversation(
         let Some(mtime) = newest_mtime_recursive(&path) else {
             continue;
         };
-        if let Some(ref current) = newest {
-            if mtime > current.modified {
-                newest = Some(ActiveConversation {
-                    conversation_id: dir_name.to_string(),
-                    task_file,
-                    modified: mtime,
-                });
-            }
-        } else {
+        let should_update = match newest {
+            Some(ref current) => mtime > current.modified,
+            None => true,
+        };
+
+        if should_update {
+            let project_name = resolve_conversation_project(brain_dir, dir_name);
             newest = Some(ActiveConversation {
                 conversation_id: dir_name.to_string(),
                 task_file,
+                project_name,
                 modified: mtime,
             });
         }

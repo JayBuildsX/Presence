@@ -13,12 +13,12 @@ export function globalStatus(state: LiveState): {
     return { label: "Paused", dot: "dot-paused" };
   }
   if (!state.discord_connected) {
-    return { label: "Discord Disconnected", dot: "dot-error" };
+    return { label: "No Discord", dot: "dot-error" };
   }
   if (state.current) {
-    return { label: "Rich Presence Live", dot: "dot-live" };
+    return { label: "Live", dot: "dot-live" };
   }
-  return { label: "Watching Applications", dot: "dot-idle" };
+  return { label: "Watching", dot: "dot-idle" };
 }
 
 export function PluginIcon({ name }: { name: string }) {

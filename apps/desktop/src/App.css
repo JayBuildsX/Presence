@@ -17,20 +17,25 @@
   align-items: center;
   justify-content: space-between;
   padding: var(--space-2) 0;
-  gap: var(--space-3);
+  gap: var(--space-2);
   border-bottom: 1px solid var(--border-subtle);
   padding-bottom: var(--space-3);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
+  pointer-events: none;
+  user-select: none;
+  flex-shrink: 0;
 }
 
 .brand-mark {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: var(--radius);
   background: var(--accent-gradient);
   box-shadow: 0 2px 8px var(--accent-glow);
@@ -44,18 +49,18 @@
 .brand-text {
   display: flex;
   flex-direction: column;
-  line-height: 1.2;
+  line-height: 1.15;
 }
 
 .brand-title {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: -0.2px;
   color: var(--text);
 }
 
 .brand-subtitle {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-tertiary);
   font-weight: 500;
 }
@@ -63,20 +68,25 @@
 .header-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .status-badge {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: 5px;
+  padding: 2px 8px;
+  height: 22px;
+  box-sizing: border-box;
   border-radius: var(--radius-full);
   background: var(--surface);
   border: 1px solid var(--border);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .dot-live-badge {

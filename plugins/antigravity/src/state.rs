@@ -16,6 +16,8 @@ pub struct AntigravityState {
     pub active_task: Option<String>,
     /// The human-readable task/section name (section header if available, else main header).
     pub task_name: Option<String>,
+    /// The detected project or workspace name.
+    pub project_name: Option<String>,
     /// Whether an agent is actively working on a task.
     pub is_agent_working: bool,
 }
@@ -61,6 +63,7 @@ pub fn parse_task_md(content: &str) -> AntigravityState {
         section_header: current_section_header,
         active_task,
         task_name,
+        project_name: None,
         is_agent_working,
     }
 }
@@ -96,6 +99,7 @@ pub fn parse_plan_md(content: &str) -> AntigravityState {
         section_header: section_header.clone(),
         active_task: section_header.clone(),
         task_name: section_header.or(main_header),
+        project_name: None,
         is_agent_working,
     }
 }
