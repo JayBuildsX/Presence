@@ -210,6 +210,12 @@ impl Runtime {
             self.host.register(plugin);
         }
 
+        // 3b. Register custom apps
+        for custom in &self.config.custom_apps {
+            let plugin = Box::new(crate::custom_app::CustomAppPlugin::new(custom.clone()));
+            self.host.register(plugin);
+        }
+
         // 4. Initialize all plugins
         let init_errors = self.host.init_all();
         if !init_errors.is_empty() {
@@ -227,6 +233,18 @@ impl Runtime {
             ("OpenCode", self.config.plugins.opencode),
         ] {
             self.host.set_source_disabled(source, !enabled);
+        }
+
+        for custom in &self.config.custom_apps {
+            if !custom.enabled {
+                self.host.set_source_disabled(&custom.name, true);
+            }
+            if custom.discord_app_id > 0 {
+                self.config
+                    .outputs
+                    .discord_apps
+                    .insert(custom.name.clone(), custom.discord_app_id);
+            }
         }
 
         // 5. Create enabled outputs via OutputRegistry
@@ -250,6 +268,10 @@ impl Runtime {
             policy = ?self.config.presence.unsupported_foreground,
             "Unsupported-foreground policy configured"
         );
+
+        // 9. Eagerly probe / connect outputs (Discord IPC) so connection
+        // status is live immediately on startup if Discord is already running.
+        let _ = self.engine.reconnect_outputs();
 
         self.running.store(true, Ordering::SeqCst);
         info!("PresenceHub runtime started");
@@ -370,7 +392,8 @@ impl Runtime {
         ) {
             let _ = self.engine.publish_now(&source, &activity);
         } else {
-            // Even if idle, poll once to check if any active plugin can publish
+            // Reconnect all outputs even when idle so pipe availability is confirmed
+            self.engine.reconnect_outputs();
             let mut poll_errors = self.poll_errors.clone();
             for (source, result) in self.host.poll_all() {
                 self.handle_poll_result(&mut poll_errors, source, result);
@@ -406,7 +429,7 @@ impl Runtime {
     pub fn snapshot(&self) -> crate::state::LiveState {
         use crate::state::{LiveState, PluginView, PresenceView};
 
-        let plugins = ["FL Studio", "Antigravity", "OpenCode"]
+        let mut plugins: Vec<PluginView> = ["FL Studio", "Antigravity", "OpenCode"]
             .into_iter()
             .map(|name| {
                 let enabled = match name {
@@ -424,16 +447,39 @@ impl Runtime {
                     enabled,
                     active: self.engine.is_source_active(name),
                     summary,
+                    is_custom: false,
                 }
             })
             .collect();
 
+        for custom in &self.config.custom_apps {
+            let enabled = custom.enabled && !self.host.is_source_disabled(&custom.name);
+            let summary = self
+                .engine
+                .source_activity(&custom.name)
+                .map(|activity| activity.state.clone());
+            plugins.push(PluginView {
+                name: custom.name.clone(),
+                enabled,
+                active: self.engine.is_source_active(&custom.name),
+                summary,
+                is_custom: true,
+            });
+        }
+
         let owner = self.engine.displayed_source().map(str::to_owned);
         let current = owner.as_deref().and_then(|source| {
-            self.engine.current_activity().map(|activity| PresenceView {
-                source: source.to_string(),
-                state: activity.state.clone(),
-                details: activity.details.clone(),
+            self.engine.current_activity().map(|activity| {
+                let (state, details) = if self.config.streamer_mode {
+                    sanitize_activity_display(source, &activity.state, activity.details.as_deref())
+                } else {
+                    (activity.state.clone(), activity.details.clone())
+                };
+                PresenceView {
+                    source: source.to_string(),
+                    state,
+                    details,
+                }
             })
         });
 
@@ -441,9 +487,12 @@ impl Runtime {
             paused: self.paused,
             poll_interval_ms: self.poll_interval.as_millis() as u64,
             discord_connected: self.engine.any_output_connected(),
+            discord_error: self.engine.connection_error(),
             owner,
             current,
             pinned_source: self.engine.pinned_source().map(str::to_owned),
+            streamer_mode: self.config.streamer_mode,
+            custom_apps: self.config.custom_apps.clone(),
             plugins,
         }
     }
@@ -488,7 +537,18 @@ impl Runtime {
             "FL Studio" => self.config.plugins.flstudio = enabled,
             "Antigravity" => self.config.plugins.antigravity = enabled,
             "OpenCode" => self.config.plugins.opencode = enabled,
-            unknown => return Err(format!("Unknown plugin: {unknown}")),
+            custom_name => {
+                if let Some(custom) = self
+                    .config
+                    .custom_apps
+                    .iter_mut()
+                    .find(|c| c.name == custom_name)
+                {
+                    custom.enabled = enabled;
+                } else {
+                    return Err(format!("Unknown plugin: {custom_name}"));
+                }
+            }
         }
 
         // If the plugin was not registered at startup, instantiate and register it now.
@@ -503,7 +563,16 @@ impl Runtime {
                 "FL Studio" => Box::new(presencehub_flstudio::FlStudioPlugin::new()),
                 "Antigravity" => Box::new(presencehub_antigravity::AntigravityPlugin::new()),
                 "OpenCode" => Box::new(presencehub_opencode::OpenCodePlugin::new()),
-                _ => unreachable!(),
+                custom_name => {
+                    let custom = self
+                        .config
+                        .custom_apps
+                        .iter()
+                        .find(|c| c.name == custom_name)
+                        .cloned()
+                        .ok_or_else(|| format!("Unknown custom app: {custom_name}"))?;
+                    Box::new(crate::custom_app::CustomAppPlugin::new(custom))
+                }
             };
             self.host.register(plugin);
             if let Some(p) = self
@@ -530,6 +599,130 @@ impl Runtime {
         // I/O behind the runtime lock.
         self.config_dirty = true;
         self.flush_config_if_due()?;
+        Ok(())
+    }
+
+    /// Toggles Streamer / Privacy Mode.
+    pub fn set_streamer_mode(&mut self, enabled: bool) {
+        if self.config.streamer_mode == enabled {
+            return;
+        }
+        self.config.streamer_mode = enabled;
+        self.config_dirty = true;
+        let _ = self.save_config_now();
+
+        // Republish currently displayed presence with the new privacy setting applied
+        if !self.paused {
+            if let (Some(source), Some(activity)) = (
+                self.engine.displayed_source().map(str::to_owned),
+                self.engine.current_activity().cloned(),
+            ) {
+                let activity = if enabled {
+                    sanitize_activity(&source, activity)
+                } else {
+                    activity
+                };
+                let _ = self.engine.publish_now(&source, &activity);
+            }
+        }
+    }
+
+    /// Adds a user-defined custom application watcher.
+    pub fn add_custom_app(&mut self, app: presencehub_core::CustomAppConfig) -> Result<(), String> {
+        if self
+            .config
+            .custom_apps
+            .iter()
+            .any(|a| a.id == app.id || a.name.eq_ignore_ascii_case(&app.name))
+        {
+            return Err("An application with this name or ID already exists".to_string());
+        }
+
+        if app.discord_app_id > 0 {
+            self.config
+                .outputs
+                .discord_apps
+                .insert(app.name.clone(), app.discord_app_id);
+        } else {
+            self.config.outputs.discord_apps.remove(&app.name);
+        }
+        self.engine
+            .update_output_app_ids(self.config.outputs.discord_apps.clone());
+
+        let plugin = Box::new(crate::custom_app::CustomAppPlugin::new(app.clone()));
+        self.host.register(plugin);
+        if !app.enabled {
+            self.host.set_source_disabled(&app.name, true);
+        }
+
+        self.config.custom_apps.push(app);
+        self.config_dirty = true;
+        self.save_config_now()?;
+        Ok(())
+    }
+
+    /// Updates an existing user-defined custom application watcher.
+    pub fn update_custom_app(
+        &mut self,
+        app: presencehub_core::CustomAppConfig,
+    ) -> Result<(), String> {
+        let pos = self
+            .config
+            .custom_apps
+            .iter()
+            .position(|a| a.id == app.id)
+            .ok_or_else(|| "Custom application not found".to_string())?;
+
+        let old_name = self.config.custom_apps[pos].name.clone();
+
+        self.host.remove_plugin(&old_name);
+        self.engine.end_session(&old_name);
+        if old_name != app.name {
+            self.config.outputs.discord_apps.remove(&old_name);
+        }
+
+        if app.discord_app_id > 0 {
+            self.config
+                .outputs
+                .discord_apps
+                .insert(app.name.clone(), app.discord_app_id);
+        } else {
+            self.config.outputs.discord_apps.remove(&app.name);
+        }
+        self.engine
+            .update_output_app_ids(self.config.outputs.discord_apps.clone());
+
+        let plugin = Box::new(crate::custom_app::CustomAppPlugin::new(app.clone()));
+        self.host.register(plugin);
+        if !app.enabled {
+            self.host.set_source_disabled(&app.name, true);
+        }
+
+        self.config.custom_apps[pos] = app;
+
+        self.config_dirty = true;
+        self.save_config_now()?;
+        Ok(())
+    }
+
+    /// Removes a user-defined custom application watcher.
+    pub fn remove_custom_app(&mut self, id: &str) -> Result<(), String> {
+        let pos = self
+            .config
+            .custom_apps
+            .iter()
+            .position(|a| a.id == id)
+            .ok_or_else(|| "Custom application not found".to_string())?;
+
+        let app = self.config.custom_apps.remove(pos);
+        self.host.remove_plugin(&app.name);
+        self.engine.end_session(&app.name);
+        self.config.outputs.discord_apps.remove(&app.name);
+        self.engine
+            .update_output_app_ids(self.config.outputs.discord_apps.clone());
+
+        self.config_dirty = true;
+        self.save_config_now()?;
         Ok(())
     }
 
@@ -621,6 +814,11 @@ impl Runtime {
                 if poll_errors.polled_ok(&source) {
                     info!(source = %source, "Plugin recovered");
                 }
+                let activity = if self.config.streamer_mode {
+                    sanitize_activity(&source, activity)
+                } else {
+                    activity
+                };
                 debug!(
                     source = %source,
                     state = %activity.state,
@@ -725,6 +923,37 @@ impl Runtime {
     #[allow(dead_code)]
     pub fn engine(&self) -> &PresenceEngine {
         &self.engine
+    }
+}
+
+/// Applies privacy / streamer mode masking to an activity.
+fn sanitize_activity(source: &str, mut activity: Activity) -> Activity {
+    let (state, details) =
+        sanitize_activity_display(source, &activity.state, activity.details.as_deref());
+    activity.state = state;
+    activity.details = details;
+    activity
+}
+
+/// Computes the masked state and details for privacy / streamer mode.
+fn sanitize_activity_display(
+    source: &str,
+    state: &str,
+    _details: Option<&str>,
+) -> (String, Option<String>) {
+    match source {
+        "FL Studio" => {
+            if state.to_ascii_lowercase().contains("rendering") {
+                ("Rendering Audio".to_string(), Some("FL Studio".to_string()))
+            } else {
+                ("Producing Music".to_string(), Some("FL Studio".to_string()))
+            }
+        }
+        "Antigravity" | "OpenCode" => (
+            "Coding".to_string(),
+            Some("Software Development".to_string()),
+        ),
+        _ => ("Active".to_string(), Some(format!("Working in {}", source))),
     }
 }
 

@@ -292,6 +292,16 @@ impl PluginHost {
         info!(plugin = %name, "Plugin registered");
     }
 
+    /// Removes a registered plugin by name, shutting it down if active.
+    pub fn remove_plugin(&mut self, name: &str) {
+        if let Some(pos) = self.plugins.iter().position(|p| p.metadata().name == name) {
+            let mut plugin = self.plugins.remove(pos);
+            let _ = plugin.shutdown();
+            info!(plugin = %name, "Plugin unregistered");
+        }
+        self.disabled.remove(name);
+    }
+
     /// Returns an immutable slice of all registered plugins.
     ///
     /// This allows the runtime to iterate over plugins without

@@ -125,6 +125,10 @@ pub struct DiscordOutput {
     /// The application ID of the connection currently (or last) established.
     /// `None` means no application has been selected yet.
     current_app_id: Option<u64>,
+    /// Last failure message, if the most recent publish/reconnect failed.
+    /// Surfaced to the GUI so connection problems are visible instead of
+    /// silent. Cleared on the next success.
+    last_error: Option<String>,
 }
 
 impl DiscordOutput {
@@ -138,6 +142,7 @@ impl DiscordOutput {
             default_app_id,
             app_ids,
             current_app_id: None,
+            last_error: None,
         }
     }
 
@@ -191,36 +196,18 @@ impl DiscordOutput {
         }
     }
 
-    /// Render a [`RichPresence`] to Discord and send it.
-    ///
-    /// This is the renderer entry point. It maps the generic presence onto
-    /// the Discord protocol payload and delegates to the client. It knows
-    /// nothing about plugins or application-specific data.
-    pub fn set_presence(&mut self, presence: &RichPresence) -> Result<(), OutputError> {
-        let client = self.ensure_client()?;
-
-        let activity_data = to_activity_data(presence);
-
-        match client.set_activity(activity_data) {
-            Ok(()) => {
-                debug!(state = %presence.state.as_deref().unwrap_or_default(), "Published Rich Presence");
-                Ok(())
-            }
-            Err(e) => {
-                // Connection lost — drop the client so the next publish reconnects.
-                warn!(error = %e, "Discord publish failed, will reconnect");
-                self.drop_client();
-                Err(OutputError::PublishFailed(format!(
-                    "Discord publish failed: {}",
-                    e
-                )))
-            }
+    /// Records a publish outcome for GUI diagnostics.
+    fn record(&mut self, result: Result<(), OutputError>) -> Result<(), OutputError> {
+        match &result {
+            Ok(()) => self.last_error = None,
+            Err(e) => self.last_error = Some(e.to_string()),
         }
+        result
     }
-}
 
-impl Output for DiscordOutput {
-    fn publish(&mut self, source: &str, activity: &Activity) -> Result<(), OutputError> {
+    /// Original publish body, split out so the outcome can be recorded
+    /// for GUI diagnostics without changing publish semantics.
+    fn publish_inner(&mut self, source: &str, activity: &Activity) -> Result<(), OutputError> {
         let resolved_app_id = self.resolve_app_id(source);
 
         info!(
@@ -257,6 +244,44 @@ impl Output for DiscordOutput {
         self.set_presence(&presence)
     }
 
+    /// Render a [`RichPresence`] to Discord and send it.
+    ///
+    /// This is the renderer entry point. It maps the generic presence onto
+    /// the Discord protocol payload and delegates to the client. It knows
+    /// nothing about plugins or application-specific data.
+    pub fn set_presence(&mut self, presence: &RichPresence) -> Result<(), OutputError> {
+        let client = self.ensure_client()?;
+
+        let activity_data = to_activity_data(presence);
+
+        match client.set_activity(activity_data) {
+            Ok(()) => {
+                debug!(state = %presence.state.as_deref().unwrap_or_default(), "Published Rich Presence");
+                Ok(())
+            }
+            Err(e) => {
+                // Connection lost — drop the client so the next publish reconnects.
+                warn!(error = %e, "Discord publish failed, will reconnect");
+                self.drop_client();
+                Err(OutputError::PublishFailed(format!(
+                    "Discord publish failed: {}",
+                    e
+                )))
+            }
+        }
+    }
+}
+
+impl Output for DiscordOutput {
+    fn publish(&mut self, source: &str, activity: &Activity) -> Result<(), OutputError> {
+        let result = self.publish_inner(source, activity);
+        self.record(result)
+    }
+
+    fn last_error(&self) -> Option<String> {
+        self.last_error.clone()
+    }
+
     /// Clear the Rich Presence activity.
     ///
     /// Tells Discord to remove the current presence. This overrides the
@@ -291,6 +316,20 @@ impl Output for DiscordOutput {
 
     fn connection_state(&self) -> Option<bool> {
         Some(self.is_connected())
+    }
+
+    fn reconnect(&mut self) -> Result<bool, OutputError> {
+        self.drop_client();
+        let result = match self.ensure_client() {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        };
+        let _ = self.record(result);
+        Ok(self.is_connected())
+    }
+
+    fn set_app_ids(&mut self, app_ids: HashMap<String, u64>) {
+        self.app_ids = app_ids;
     }
 }
 
@@ -394,6 +433,7 @@ mod tests {
             default_app_id: 123456789,
             app_ids: HashMap::new(),
             current_app_id: Some(123456789),
+            last_error: None,
         };
         assert!(output.client.is_some());
         output.clear();
@@ -416,6 +456,7 @@ mod tests {
             default_app_id: 123456789,
             app_ids: HashMap::new(),
             current_app_id: Some(123456789),
+            last_error: None,
         };
         output.clear();
         output.clear();
@@ -490,6 +531,7 @@ mod tests {
                 default_app_id: 123456789,
                 app_ids: HashMap::new(),
                 current_app_id: None,
+                last_error: None,
             };
             engine.register_output(Box::new(output));
 
@@ -640,6 +682,10 @@ mod tests {
 
     #[test]
     fn publish_resolves_per_source_app_id_while_connected() {
+        let _guard = crate::DISCORD_PIPE_TEST_LOCK.lock().unwrap();
+        if discord_pipe_available() {
+            return;
+        }
         // Publishing a mapped source selects that source's application ID.
         let mut output = DiscordOutput::new(100, per_source_app_ids());
         // Discord not running locally → publish fails, but the resolved app id
@@ -652,6 +698,10 @@ mod tests {
 
     #[test]
     fn publish_switches_app_id_antigravity_to_flstudio() {
+        let _guard = crate::DISCORD_PIPE_TEST_LOCK.lock().unwrap();
+        if discord_pipe_available() {
+            return;
+        }
         // Antigravity (200) is the current connection. Publishing FL Studio (300)
         // must drop the old client and select the new application ID.
         let mut output = DiscordOutput {
@@ -659,6 +709,7 @@ mod tests {
             default_app_id: 100,
             app_ids: per_source_app_ids(),
             current_app_id: Some(200),
+            last_error: None,
         };
 
         let _ = output.publish("FL Studio", &test_activity("Editing"));
@@ -676,12 +727,17 @@ mod tests {
 
     #[test]
     fn publish_switches_app_id_flstudio_to_antigravity() {
+        let _guard = crate::DISCORD_PIPE_TEST_LOCK.lock().unwrap();
+        if discord_pipe_available() {
+            return;
+        }
         // The reverse transition.
         let mut output = DiscordOutput {
             client: Some(DiscordClient::new(300)),
             default_app_id: 100,
             app_ids: per_source_app_ids(),
             current_app_id: Some(300),
+            last_error: None,
         };
 
         let _ = output.publish("Antigravity", &test_activity("Coding"));
@@ -699,6 +755,10 @@ mod tests {
 
     #[test]
     fn publish_repeated_same_source_keeps_app_id() {
+        let _guard = crate::DISCORD_PIPE_TEST_LOCK.lock().unwrap();
+        if discord_pipe_available() {
+            return;
+        }
         // Repeated publishes for the same source must never change the
         // selected application ID (the reconnect gate must not fire).
         let mut output = DiscordOutput::new(100, per_source_app_ids());
@@ -748,6 +808,10 @@ mod tests {
 
     #[test]
     fn publish_switch_while_disconnected_uses_new_sources_app_id() {
+        let _guard = crate::DISCORD_PIPE_TEST_LOCK.lock().unwrap();
+        if discord_pipe_available() {
+            return;
+        }
         // No client exists (disconnected). Publishing Antigravity selects 200;
         // switching source still disconnected selects 300 without any prior
         // connection to tear down.
@@ -764,6 +828,10 @@ mod tests {
 
     #[test]
     fn publish_failure_drops_client_and_keeps_app_id() {
+        let _guard = crate::DISCORD_PIPE_TEST_LOCK.lock().unwrap();
+        if discord_pipe_available() {
+            return;
+        }
         // A publish that fails (no live Discord) drops the client but keeps
         // the resolved application ID so the next publish reconnects with the
         // correct application.
@@ -772,6 +840,7 @@ mod tests {
             default_app_id: 100,
             app_ids: per_source_app_ids(),
             current_app_id: Some(200),
+            last_error: None,
         };
 
         let result = output.publish("Antigravity", &test_activity("Coding"));
@@ -781,6 +850,13 @@ mod tests {
             output.current_app_id,
             Some(200),
             "resolved app id retained so the next publish reconnects with it"
+        );
+        assert!(
+            output
+                .last_error
+                .as_deref()
+                .is_some_and(|e| e.contains("Discord publish failed")),
+            "failed publish must record the error for GUI diagnostics"
         );
 
         // The next publish reconnects using the retained application ID.

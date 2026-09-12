@@ -72,6 +72,27 @@ pub trait Output: Send {
     fn connection_state(&self) -> Option<bool> {
         None
     }
+
+    /// Last failure message, if the most recent operation on this output
+    /// failed. Used by the desktop GUI to explain connection problems.
+    fn last_error(&self) -> Option<String> {
+        None
+    }
+
+    /// Attempt to establish or restore a live connection to the downstream service.
+    ///
+    /// The default implementation is a no-op returning `Ok(false)`. Outputs with a
+    /// live transport (like Discord IPC) should override this to probe/connect.
+    fn reconnect(&mut self) -> Result<bool, OutputError> {
+        Ok(false)
+    }
+
+    /// Update output-specific application IDs dynamically.
+    ///
+    /// The default implementation is a no-op. Outputs that map plugin/source
+    /// identities to upstream application IDs (such as Discord Rich Presence)
+    /// override this to update their routing table at runtime.
+    fn set_app_ids(&mut self, _app_ids: HashMap<String, u64>) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +346,13 @@ impl PresenceEngine {
         self.outputs.push(output);
     }
 
+    /// Dynamically update application ID mappings across all registered outputs.
+    pub fn update_output_app_ids(&mut self, app_ids: HashMap<String, u64>) {
+        for output in &mut self.outputs {
+            output.set_app_ids(app_ids.clone());
+        }
+    }
+
     /// Returns the activity currently displayed to outputs, if any.
     ///
     /// The returned activity has been stamped with its session start time.
@@ -560,6 +588,22 @@ impl PresenceEngine {
         self.outputs
             .iter()
             .any(|output| output.connection_state() == Some(true))
+    }
+
+    /// Reconnects all registered outputs and returns whether any output is connected.
+    pub fn reconnect_outputs(&mut self) -> bool {
+        for output in &mut self.outputs {
+            let _ = output.reconnect();
+        }
+        self.any_output_connected()
+    }
+
+    /// First recorded output failure message, if any output has one.
+    ///
+    /// Used by the desktop GUI to explain *why* Discord shows as
+    /// disconnected instead of leaving the user guessing.
+    pub fn connection_error(&self) -> Option<String> {
+        self.outputs.iter().filter_map(|o| o.last_error()).next()
     }
 
     /// Recomputes the display owner and reconciles the outputs.
@@ -1414,6 +1458,31 @@ mod tests {
             Some("Editing")
         );
         assert!(engine.source_activity("B").is_none());
+    }
+
+    #[test]
+    fn engine_connection_error_reports_first_failing_output() {
+        struct FailingOutput {
+            message: Option<String>,
+        }
+        impl Output for FailingOutput {
+            fn publish(&mut self, _source: &str, _activity: &Activity) -> Result<(), OutputError> {
+                Ok(())
+            }
+            fn last_error(&self) -> Option<String> {
+                self.message.clone()
+            }
+        }
+
+        let mut engine = PresenceEngine::new();
+        engine.register_output(Box::new(FailingOutput { message: None }));
+        engine.register_output(Box::new(FailingOutput {
+            message: Some("Discord connection failed: boom".to_string()),
+        }));
+        assert_eq!(
+            engine.connection_error().as_deref(),
+            Some("Discord connection failed: boom")
+        );
     }
 
     #[test]

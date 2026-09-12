@@ -13,8 +13,7 @@ export function globalStatus(state: LiveState): {
   }
   if (!state.discord_connected) {
     return { label: "No Discord", dot: "dot-error" };
-  }
-  if (state.current) {
+  }  if (state.current) {
     return { label: "Live", dot: "dot-live" };
   }
   return { label: "Watching", dot: "dot-idle" };

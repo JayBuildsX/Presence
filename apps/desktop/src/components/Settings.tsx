@@ -17,7 +17,7 @@ const INTERVAL_PRESETS = [
 ];
 
 interface ShortcutConfig {
-  id: "pause" | "reconnect" | "toggle_window";
+  id: "pause" | "reconnect" | "toggle_window" | "streamer_mode";
   action: string;
   desc: string;
   keys: string[];
@@ -45,6 +45,13 @@ const DEFAULT_SHORTCUTS: ShortcutConfig[] = [
     desc: "Toggles PresenceHub between screen and system tray",
     keys: ["Ctrl", "Shift", "H"],
     defaultKeys: ["Ctrl", "Shift", "H"],
+  },
+  {
+    id: "streamer_mode",
+    action: "Toggle Streamer Mode",
+    desc: "Masks private project names and file paths",
+    keys: ["Ctrl", "Shift", "S"],
+    defaultKeys: ["Ctrl", "Shift", "S"],
   },
 ];
 

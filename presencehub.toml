@@ -1,13 +1,15 @@
 config_version = 1
 log_level = "info"
+custom_apps = []
+streamer_mode = true
 
 [runtime]
 poll_interval_ms = 500
 
 [plugins]
-flstudio = true
-antigravity = true
-opencode = true
+flstudio = false
+antigravity = false
+opencode = false
 
 [outputs]
 console = true
@@ -16,8 +18,8 @@ discord_app_id = 1533559059125637311
 
 [outputs.discord_apps]
 "FL Studio" = 1192880494086455357
-OpenCode = 1273940066603106328
 Antigravity = 1543009205785591868
+OpenCode = 1273940066603106328
 
 [presence]
 ownership = "Foreground"

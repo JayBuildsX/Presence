@@ -8,6 +8,7 @@ interface HeaderProps {
   showSettings: boolean;
   onTogglePause: () => void;
   onToggleSettings: () => void;
+  onToggleStreamerMode: () => void;
   onReconnectDiscord?: () => void;
   isSyncing?: boolean;
 }
@@ -18,6 +19,7 @@ export default function Header({
   showSettings,
   onTogglePause,
   onToggleSettings,
+  onToggleStreamerMode,
   onReconnectDiscord,
   isSyncing,
 }: HeaderProps) {
@@ -63,7 +65,11 @@ export default function Header({
         <div
           className={`status-badge ${status.dot}-badge ${!state.discord_connected && onReconnectDiscord ? "is-clickable" : ""}`}
           onClick={!state.discord_connected ? onReconnectDiscord : undefined}
-          title={!state.discord_connected ? "Click to reconnect to Discord" : undefined}
+          title={
+            !state.discord_connected
+              ? (state.discord_error ?? "Click to reconnect to Discord")
+              : undefined
+          }
         >
           <StatusDot className={status.dot} />
           <span className="status-label">{status.label}</span>
@@ -117,6 +123,32 @@ export default function Header({
               <span>Pause</span>
             </>
           )}
+        </button>
+
+        <button
+          type="button"
+          className={`icon-button ${state.streamer_mode ? "is-streamer-active" : ""}`}
+          onClick={onToggleStreamerMode}
+          title={
+            state.streamer_mode
+              ? "Streamer Mode Active (Ctrl+Shift+S) — Sensitive project details masked"
+              : "Streamer Mode (Ctrl+Shift+S) — Mask project and file details"
+          }
+          aria-label="Toggle Streamer Mode"
+          aria-pressed={state.streamer_mode}
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill={state.streamer_mode ? "currentColor" : "none"}
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          </svg>
         </button>
 
         <button

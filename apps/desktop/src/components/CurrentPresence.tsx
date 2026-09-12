@@ -24,10 +24,17 @@ export default function CurrentPresence({ state }: { state: LiveState }) {
               <div className="presence-source-row">
                 <span className="presence-source-name">{state.current.source}</span>
                 <span className="presence-source-badge">Active</span>
+                {state.streamer_mode && (
+                  <span className="privacy-badge" title="Project and file names are masked for privacy">
+                    🛡️ Streamer Mode
+                  </span>
+                )}
               </div>
-              <div className="presence-state-text">{state.current.state}</div>
+              <div className="presence-state-text">
+                {state.current.details ? state.current.details : state.current.state}
+              </div>
               {state.current.details && (
-                <div className="presence-details-text">{state.current.details}</div>
+                <div className="presence-details-text">{state.current.state}</div>
               )}
             </div>
           </div>

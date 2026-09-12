@@ -4,12 +4,14 @@
 //! The runtime is initialized and started here.
 
 mod commands;
+mod custom_app;
 mod foreground;
 mod registry;
 mod runtime;
 mod state;
 
-use presencehub_core::Config;
+use presencehub_core::{Config, OwnershipPolicy, UnsupportedForegroundPolicy};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
@@ -43,25 +45,45 @@ pub fn run() {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    // 1. Locate config file (executable-adjacent or ancestor-adjacent).
+    // 1. Locate config file (executable-adjacent, ancestor, or %APPDATA%).
     let config_path = resolve_config_path();
-    let config = match &config_path {
-        Some(path) => {
-            info!(path = %path.display(), "Loading configuration");
-            Config::load(path).unwrap_or_else(|e| {
-                warn!(error = %e, "Invalid configuration file, falling back to defaults");
-                Config::default()
-            })
+    info!(path = %config_path.display(), "Loading configuration");
+    let mut config = Config::load(&config_path).unwrap_or_else(|e| {
+        warn!(error = %e, "Invalid configuration file, falling back to desktop defaults");
+        desktop_default_config()
+    });
+
+    // Ensure desktop Discord output is properly configured with app IDs even if
+    // an older or partial configuration omitted them.
+    if !config.outputs.discord || config.outputs.discord_apps.is_empty() {
+        info!("Ensuring Discord output and default app IDs are active");
+        config.outputs.discord = true;
+        if config.outputs.discord_app_id == 0 {
+            config.outputs.discord_app_id = 1533559059125637311;
         }
-        None => {
-            info!("No configuration file found, using defaults");
-            Config::default()
+        if !config.outputs.discord_apps.contains_key("FL Studio") {
+            config
+                .outputs
+                .discord_apps
+                .insert("FL Studio".to_string(), 1192880494086455357);
         }
-    };
+        if !config.outputs.discord_apps.contains_key("Antigravity") {
+            config
+                .outputs
+                .discord_apps
+                .insert("Antigravity".to_string(), 1543009205785591868);
+        }
+        if !config.outputs.discord_apps.contains_key("OpenCode") {
+            config
+                .outputs
+                .discord_apps
+                .insert("OpenCode".to_string(), 1273940066603106328);
+        }
+    }
 
     // 2. Start the runtime with loaded config.
     let mut runtime = runtime::Runtime::with_config(config);
-    runtime.set_config_path(config_path);
+    runtime.set_config_path(Some(config_path));
     if let Err(e) = runtime.start() {
         warn!(error = %e, "Failed to start runtime during initialization");
     }
@@ -88,6 +110,12 @@ pub fn run() {
             commands::get_autostart_status,
             commands::set_autostart,
             commands::register_custom_shortcut,
+            commands::get_running_applications,
+            commands::add_custom_app,
+            commands::update_custom_app,
+            commands::remove_custom_app,
+            commands::set_streamer_mode,
+            commands::inspect_discord_app,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -203,11 +231,13 @@ pub fn run() {
             let pause_shortcut: Shortcut = "CommandOrControl+Shift+P".parse().unwrap();
             let reconnect_shortcut: Shortcut = "CommandOrControl+Shift+D".parse().unwrap();
             let toggle_win_shortcut: Shortcut = "CommandOrControl+Shift+H".parse().unwrap();
+            let streamer_shortcut: Shortcut = "CommandOrControl+Shift+S".parse().unwrap();
 
             if let Ok(mut lock) = shortcut_map.0.write() {
-                lock.insert(pause_shortcut.clone(), "pause".to_string());
-                lock.insert(reconnect_shortcut.clone(), "reconnect".to_string());
-                lock.insert(toggle_win_shortcut.clone(), "toggle_window".to_string());
+                lock.insert(pause_shortcut, "pause".to_string());
+                lock.insert(reconnect_shortcut, "reconnect".to_string());
+                lock.insert(toggle_win_shortcut, "toggle_window".to_string());
+                lock.insert(streamer_shortcut, "streamer_mode".to_string());
             }
 
             let app_handle_for_shortcuts = app.handle().clone();
@@ -256,6 +286,23 @@ pub fn run() {
                                         );
                                     });
                                 }
+                                "streamer_mode" => {
+                                    let state = state_for_shortcuts.clone();
+                                    let app_handle = app_handle_for_shortcuts.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        let mut runtime = state.runtime.lock().await;
+                                        let curr = runtime.snapshot().streamer_mode;
+                                        let next = !curr;
+                                        runtime.set_streamer_mode(next);
+                                        let _ = app_handle.emit(
+                                            "toast",
+                                            serde_json::json!({
+                                                "text": if next { "🛡️ Streamer Mode Enabled" } else { "Streamer Mode Disabled" },
+                                                "type": if next { "success" } else { "info" }
+                                            }),
+                                        );
+                                    });
+                                }
                                 "toggle_window" => {
                                     if let Some(window) =
                                         app_handle_for_shortcuts.get_webview_window("main")
@@ -281,6 +328,7 @@ pub fn run() {
             let _ = app.global_shortcut().register(pause_shortcut);
             let _ = app.global_shortcut().register(reconnect_shortcut);
             let _ = app.global_shortcut().register(toggle_win_shortcut);
+            let _ = app.global_shortcut().register(streamer_shortcut);
 
             // Drive polling on a background task; each iteration locks the
             // runtime briefly so GUI commands interleave between polls.
@@ -336,31 +384,35 @@ pub fn run() {
         });
 }
 
+/// Returns the full desktop production configuration with Discord enabled
+/// and preconfigured application IDs for supported applications.
+pub fn desktop_default_config() -> Config {
+    let mut config = Config::default();
+    config.runtime.poll_interval_ms = 500;
+    config.plugins.flstudio = true;
+    config.plugins.antigravity = true;
+    config.plugins.opencode = true;
+    config.outputs.console = true;
+    config.outputs.discord = true;
+    config.outputs.discord_app_id = 1533559059125637311;
+    let mut discord_apps = HashMap::new();
+    discord_apps.insert("OpenCode".to_string(), 1273940066603106328);
+    discord_apps.insert("Antigravity".to_string(), 1543009205785591868);
+    discord_apps.insert("FL Studio".to_string(), 1192880494086455357);
+    config.outputs.discord_apps = discord_apps;
+    config.presence.ownership = OwnershipPolicy::Foreground;
+    config.presence.unsupported_foreground = UnsupportedForegroundPolicy::KeepLast;
+    config
+}
+
 /// Resolve the configuration file path for the desktop application.
 ///
-/// The config is resolved deterministically so the application behaves the
-/// same whether it is launched from a terminal or by double-clicking the
-/// executable:
-///
-/// 1. `presencehub.toml` in the executable's directory (portable layout:
-///    config shipped next to the exe).
-/// 2. `presencehub.toml` in the executable's directory ancestors (source-tree
-///    layout: `target\debug\presencehub-desktop.exe` finds a config at the
-///    project root).
-/// 3. `presencehub.toml` in the current working directory and its ancestors.
-///    (Terminal launches, including `cargo run`, use the project root as the
-///    working directory, so this keeps the existing development workflow.)
-///
-/// Order matters: an explicit exe-adjacent config wins over one resolved from
-/// the working directory, and the nearest ancestor wins. Explorer launches a
-/// process with the working directory set to `C:\Windows\system32`, so a
-/// purely working-directory-relative lookup would silently miss the config;
-/// the exe-relative search guarantees a deterministic result regardless of
-/// how the application was started.
-///
-/// If none of the candidates exist, `None` is returned and the caller falls
-/// back to default configuration (existing missing-config semantics).
-fn resolve_config_path() -> Option<PathBuf> {
+/// 1. `presencehub.toml` in the executable's directory or ancestors (portable / developer).
+/// 2. `presencehub.toml` in the working directory or ancestors.
+/// 3. `%APPDATA%\PresenceHub\presencehub.toml` (standard Windows installation).
+///    If it does not exist, the directory is created and populated with the default
+///    desktop configuration so user settings persist across sessions.
+fn resolve_config_path() -> PathBuf {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     if let Ok(exe) = std::env::current_exe() {
@@ -375,7 +427,36 @@ fn resolve_config_path() -> Option<PathBuf> {
         candidates.extend(cwd.ancestors().skip(1).map(Path::to_path_buf));
     }
 
-    find_first_existing_config(candidates.iter().map(PathBuf::as_path))
+    if let Some(existing) = find_first_existing_config(candidates.iter().map(PathBuf::as_path)) {
+        return existing;
+    }
+
+    let appdata_dir = std::env::var("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("USERPROFILE")
+                .map(|p| PathBuf::from(p).join("AppData").join("Roaming"))
+                .unwrap_or_else(|_| PathBuf::from("."))
+        })
+        .join("PresenceHub");
+
+    let appdata_config = appdata_dir.join(CONFIG_FILE_NAME);
+    if appdata_config.is_file() {
+        return appdata_config;
+    }
+
+    if let Err(e) = std::fs::create_dir_all(&appdata_dir) {
+        warn!(error = %e, "Failed to create AppData directory for PresenceHub");
+    } else {
+        let default_config = desktop_default_config();
+        if let Err(e) = default_config.save(&appdata_config) {
+            warn!(error = %e, "Failed to write default configuration to AppData");
+        } else {
+            info!(path = %appdata_config.display(), "Initialized default desktop configuration");
+        }
+    }
+
+    appdata_config
 }
 
 /// Returns the first candidate directory (in order) that contains the

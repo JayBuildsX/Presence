@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { LiveState } from "./types";
+import type { CustomAppConfig, DiscordAppDetails, LiveState, RunningProcessView } from "./types";
 
 export async function getState(): Promise<LiveState> {
   return invoke<LiveState>("get_state");
@@ -62,4 +62,28 @@ export async function registerCustomShortcut(
     oldShortcut,
     newShortcut,
   });
+}
+
+export async function getRunningApplications(): Promise<RunningProcessView[]> {
+  return invoke<RunningProcessView[]>("get_running_applications");
+}
+
+export async function addCustomApp(app: CustomAppConfig): Promise<LiveState> {
+  return invoke<LiveState>("add_custom_app", { app });
+}
+
+export async function updateCustomApp(app: CustomAppConfig): Promise<LiveState> {
+  return invoke<LiveState>("update_custom_app", { app });
+}
+
+export async function removeCustomApp(id: string): Promise<LiveState> {
+  return invoke<LiveState>("remove_custom_app", { id });
+}
+
+export async function setStreamerMode(enabled: boolean): Promise<LiveState> {
+  return invoke<LiveState>("set_streamer_mode", { enabled });
+}
+
+export async function inspectDiscordApp(appId: string): Promise<DiscordAppDetails> {
+  return invoke<DiscordAppDetails>("inspect_discord_app", { appId });
 }

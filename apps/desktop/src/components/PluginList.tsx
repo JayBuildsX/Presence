@@ -1,10 +1,13 @@
-import type { LiveState, PluginView } from "../types";
+import type { CustomAppConfig, LiveState, PluginView } from "../types";
 import { PluginIcon, StatusDot, pluginStatusText } from "./widgets";
 
 interface PluginListProps {
   state: LiveState;
   onToggle: (name: string, enabled: boolean) => void;
   onTogglePriority?: (name: string) => void;
+  onAddCustomApp: () => void;
+  onEditCustomApp: (app: CustomAppConfig) => void;
+  onDeleteCustomApp: (id: string, name: string) => void;
 }
 
 function statusDot(plugin: PluginView): string {
@@ -18,17 +21,38 @@ export default function PluginList({
   state,
   onToggle,
   onTogglePriority,
+  onAddCustomApp,
+  onEditCustomApp,
+  onDeleteCustomApp,
 }: PluginListProps) {
   return (
     <section className="plugins-section" aria-label="Plugins">
       <div className="section-header">
-        <h2 className="section-label">Supported Applications</h2>
-        <span className="section-count">{state.plugins.filter((p) => p.enabled).length} Enabled</span>
+        <div className="section-header-left">
+          <h2 className="section-label">Supported Applications</h2>
+          <span className="section-count">{state.plugins.filter((p) => p.enabled).length} Enabled</span>
+        </div>
+        <button
+          type="button"
+          className="add-app-button"
+          onClick={onAddCustomApp}
+          title="Add Custom Application"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          <span>Add App</span>
+        </button>
       </div>
       <div className="plugin-list">
         {state.plugins.map((plugin) => {
           const isOwner = state.owner === plugin.name && plugin.active && !state.paused;
           const isPrioritized = state.pinned_source === plugin.name;
+          const customConfig = plugin.is_custom
+            ? state.custom_apps?.find((c) => c.name === plugin.name)
+            : undefined;
+
           const cardClass = [
             "plugin-card",
             isOwner ? "is-owner" : "",
@@ -46,6 +70,7 @@ export default function PluginList({
                 <div className="plugin-info">
                   <div className="plugin-title-row">
                     <span className="plugin-name">{plugin.name}</span>
+                    {plugin.is_custom && <span className="custom-app-badge">Custom</span>}
                     {isPrioritized && <span className="priority-badge">★ Priority</span>}
                     {isOwner && <span className="owner-badge">Broadcasting</span>}
                   </div>
@@ -56,6 +81,33 @@ export default function PluginList({
                 </div>
               </div>
               <div className="plugin-right">
+                {plugin.is_custom && customConfig && (
+                  <div className="custom-card-actions">
+                    <button
+                      type="button"
+                      className="card-action-btn"
+                      onClick={() => onEditCustomApp(customConfig)}
+                      title={`Edit ${plugin.name}`}
+                      aria-label={`Edit ${plugin.name}`}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className="card-action-btn is-delete"
+                      onClick={() => onDeleteCustomApp(customConfig.id, plugin.name)}
+                      title={`Delete ${plugin.name}`}
+                      aria-label={`Delete ${plugin.name}`}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                      </svg>
+                    </button>
+                  </div>
+                )}
                 {plugin.enabled && onTogglePriority && (
                   <button
                     type="button"

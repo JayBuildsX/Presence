@@ -36,6 +36,8 @@ pub struct PluginView {
     pub active: bool,
     /// Short activity summary (the activity's state line), if active.
     pub summary: Option<String>,
+    /// Whether this is a user-defined custom app.
+    pub is_custom: bool,
 }
 
 /// The activity currently published to Discord.
@@ -58,12 +60,18 @@ pub struct LiveState {
     pub poll_interval_ms: u64,
     /// Whether any output currently reports a live connection.
     pub discord_connected: bool,
+    /// Last output failure message, if any output recorded one.
+    pub discord_error: Option<String>,
     /// Source owning the display, if any.
     pub owner: Option<String>,
     /// Currently published activity, if any.
     pub current: Option<PresenceView>,
     /// Manually pinned source overriding foreground window switching.
     pub pinned_source: Option<String>,
+    /// Privacy / Streamer mode flag.
+    pub streamer_mode: bool,
+    /// User-defined custom process watcher applications.
+    pub custom_apps: Vec<presencehub_core::CustomAppConfig>,
     /// One row per known plugin, in display order.
     pub plugins: Vec<PluginView>,
 }

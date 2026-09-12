@@ -71,12 +71,15 @@ pub fn parse_task_md(content: &str) -> AntigravityState {
 /// Parses the contents of an `implementation_plan.md` file (current format).
 ///
 /// The current format carries no in-progress markers: plan sections are
-/// written upfront and `walkthrough.md` summarizes completed work. The
-/// freshness of the file itself (enforced by the caller through the stale
-/// threshold) is the working signal.
+/// written upfront and `walkthrough.md` summarizes completed work, so no
+/// section header identifies the agent's current step (the last section
+/// is the final phase, not the work in progress). The freshness of the
+/// file itself (enforced by the caller through the stale threshold) is
+/// the working signal.
 ///
-/// - `# <Title>` sets the task name.
-/// - The last `## <Section>` header is reported as the active context.
+/// - `# <Title>` sets the task name: the overall task, always truthful.
+/// - `## <Section>` headers are recorded as context only, never as the
+///   active step.
 /// - `is_agent_working` is true when a title was found.
 pub fn parse_plan_md(content: &str) -> AntigravityState {
     let mut main_header: Option<String> = None;
@@ -96,9 +99,9 @@ pub fn parse_plan_md(content: &str) -> AntigravityState {
     let is_agent_working = main_header.is_some();
     AntigravityState {
         main_header: main_header.clone(),
-        section_header: section_header.clone(),
-        active_task: section_header.clone(),
-        task_name: section_header.or(main_header),
+        section_header,
+        active_task: None,
+        task_name: main_header,
         project_name: None,
         is_agent_working,
     }
@@ -247,7 +250,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_plan_md_uses_title_and_last_section() {
+    fn parse_plan_md_uses_title_never_a_section() {
+        // Sections are plan phases written upfront; the last one is the
+        // final phase, not the current step. Only the title is presented.
         let content = "# Milestone 0.6 - Unit 3: KPSS Test Implementation Plan\n\
                        \n\
                        ## Proposed Changes\n\
@@ -264,8 +269,11 @@ mod tests {
             Some("Milestone 0.6 - Unit 3: KPSS Test Implementation Plan")
         );
         assert_eq!(state.section_header.as_deref(), Some("Verification Plan"));
-        assert_eq!(state.active_task.as_deref(), Some("Verification Plan"));
-        assert_eq!(state.task_name.as_deref(), Some("Verification Plan"));
+        assert_eq!(state.active_task, None);
+        assert_eq!(
+            state.task_name.as_deref(),
+            Some("Milestone 0.6 - Unit 3: KPSS Test Implementation Plan")
+        );
         assert!(state.is_agent_working);
     }
 

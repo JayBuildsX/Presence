@@ -2,15 +2,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import {
+  addCustomApp,
   getState,
   reconnectDiscord,
+  removeCustomApp,
   setPaused,
   setPinnedSource,
   setPluginEnabled,
   setPollInterval,
+  setStreamerMode,
+  updateCustomApp,
 } from "./api";
-import type { LiveState } from "./types";
+import type { CustomAppConfig, LiveState } from "./types";
 import CurrentPresence from "./components/CurrentPresence";
+import CustomAppModal from "./components/CustomAppModal";
 import Header from "./components/Header";
 import PluginList from "./components/PluginList";
 import Settings from "./components/Settings";
@@ -23,6 +28,8 @@ export default function App() {
   const [activeOperations, setActiveOperations] = useState<Set<string>>(new Set());
   const [showSettings, setShowSettings] = useState(false);
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  const [isCustomAppModalOpen, setIsCustomAppModalOpen] = useState(false);
+  const [editingCustomApp, setEditingCustomApp] = useState<CustomAppConfig | null>(null);
 
   const handleDismissToast = useCallback(() => {
     setToast(null);
@@ -198,6 +205,49 @@ export default function App() {
     scheduleDebouncedAction("priority", () => setPinnedSource(nextPriority));
   }
 
+  function handleToggleStreamerMode() {
+    if (!state) return;
+    const nextStreamer = !state.streamer_mode;
+    setState((prev) => (prev ? { ...prev, streamer_mode: nextStreamer } : null));
+    showToast(
+      nextStreamer ? "🛡️ Streamer Mode enabled" : "Streamer Mode disabled",
+      nextStreamer ? "success" : "info",
+    );
+    scheduleDebouncedAction("streamer_mode", () => setStreamerMode(nextStreamer));
+  }
+
+  function handleOpenAddCustomApp() {
+    setEditingCustomApp(null);
+    setIsCustomAppModalOpen(true);
+  }
+
+  function handleOpenEditCustomApp(app: CustomAppConfig) {
+    setEditingCustomApp(app);
+    setIsCustomAppModalOpen(true);
+  }
+
+  async function handleSaveCustomApp(app: CustomAppConfig) {
+    if (editingCustomApp) {
+      const next = await updateCustomApp(app);
+      setState(next);
+      showToast(`Updated custom app: ${app.name}`, "success");
+    } else {
+      const next = await addCustomApp(app);
+      setState(next);
+      showToast(`Added custom app: ${app.name}`, "success");
+    }
+  }
+
+  async function handleDeleteCustomApp(id: string, name: string) {
+    try {
+      const next = await removeCustomApp(id);
+      setState(next);
+      showToast(`Removed custom app: ${name}`, "info");
+    } catch {
+      showToast(`Failed to remove ${name}`, "warning");
+    }
+  }
+
   const isSyncing = activeOperations.size > 0;
 
   return (
@@ -208,9 +258,12 @@ export default function App() {
             paused: false,
             poll_interval_ms: 1000,
             discord_connected: false,
+            discord_error: null,
             owner: null,
             current: null,
             pinned_source: null,
+            streamer_mode: false,
+            custom_apps: [],
             plugins: [],
           }
         }
@@ -218,6 +271,7 @@ export default function App() {
         showSettings={showSettings}
         onTogglePause={handleTogglePause}
         onToggleSettings={() => setShowSettings(!showSettings)}
+        onToggleStreamerMode={handleToggleStreamerMode}
         onReconnectDiscord={handleReconnectDiscord}
         isSyncing={isSyncing}
       />
@@ -235,6 +289,9 @@ export default function App() {
             state={state}
             onToggle={handleTogglePlugin}
             onTogglePriority={handleTogglePriority}
+            onAddCustomApp={handleOpenAddCustomApp}
+            onEditCustomApp={handleOpenEditCustomApp}
+            onDeleteCustomApp={handleDeleteCustomApp}
           />
           {showSettings && (
             <Settings
@@ -247,6 +304,12 @@ export default function App() {
         </>
       )}
       <Toast toast={toast} onDismiss={handleDismissToast} />
+      <CustomAppModal
+        isOpen={isCustomAppModalOpen}
+        initialApp={editingCustomApp}
+        onSave={handleSaveCustomApp}
+        onClose={() => setIsCustomAppModalOpen(false)}
+      />
     </div>
   );
 }

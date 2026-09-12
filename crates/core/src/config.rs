@@ -267,6 +267,85 @@ pub enum ConfigError {
 /// ownership = "foreground"
 /// unsupported_foreground = "keep_last"
 /// ```
+fn default_custom_app_state() -> String {
+    "Active".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Serialization helper for 64-bit Discord snowflake IDs.
+///
+/// JavaScript cannot safely represent integers larger than 2^53 - 1 (approx 16 digits),
+/// causing 18-19 digit Discord snowflake IDs to lose precision and become corrupted.
+/// This module serializes `u64` IDs as strings for JSON/frontend interop while deserializing
+/// from either string or integer (for backwards compatibility with TOML files).
+pub mod serde_snowflake {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if *value == 0 {
+            serializer.serialize_str("")
+        } else {
+            serializer.serialize_str(&value.to_string())
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<u64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum StringOrInt {
+            String(String),
+            Int(u64),
+        }
+
+        match StringOrInt::deserialize(deserializer)? {
+            StringOrInt::Int(i) => Ok(i),
+            StringOrInt::String(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    Ok(0)
+                } else {
+                    trimmed.parse::<u64>().map_err(serde::de::Error::custom)
+                }
+            }
+        }
+    }
+}
+
+/// Configuration for a user-defined custom process watcher application.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct CustomAppConfig {
+    /// Unique identifier for the custom app (e.g. "blender" or a UUID).
+    pub id: String,
+    /// Display name of the application (e.g. "Blender", "Photoshop").
+    pub name: String,
+    /// Process base name to watch for (e.g. "blender.exe"). Lowercased.
+    pub process_name: String,
+    /// Activity state description (e.g. "3D Modeling", "Designing").
+    #[serde(default = "default_custom_app_state")]
+    pub state: String,
+    /// Optional secondary activity details text.
+    #[serde(default)]
+    pub details: Option<String>,
+    /// Optional custom Discord application ID. A value of 0 means use the default Discord application ID.
+    #[serde(default, with = "serde_snowflake")]
+    pub discord_app_id: u64,
+    /// Optional Discord Rich Presence asset key for the large image / logo.
+    #[serde(default)]
+    pub logo_asset: Option<String>,
+    /// Whether this custom app watcher is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct Config {
     /// Schema version of this configuration file.
@@ -292,6 +371,14 @@ pub struct Config {
     /// Presence ownership settings.
     #[serde(default)]
     pub presence: PresenceConfig,
+
+    /// User-defined custom process watcher applications.
+    #[serde(default)]
+    pub custom_apps: Vec<CustomAppConfig>,
+
+    /// Privacy / Streamer mode. Obfuscates project names and private files.
+    #[serde(default)]
+    pub streamer_mode: bool,
 }
 
 impl Config {
@@ -343,6 +430,8 @@ impl Default for Config {
             plugins: PluginConfig::default(),
             outputs: OutputConfig::default(),
             presence: PresenceConfig::default(),
+            custom_apps: Vec::new(),
+            streamer_mode: false,
         }
     }
 }
@@ -362,8 +451,37 @@ mod tests {
         assert!(config.plugins.antigravity);
         assert!(config.outputs.console);
         assert!(!config.outputs.discord);
-        assert_eq!(config.outputs.discord_app_id, 0);
-        assert!(config.outputs.discord_apps.is_empty());
+        assert_eq!(config.outputs.discord_apps.is_empty(), true);
+        assert!(config.custom_apps.is_empty());
+        assert!(!config.streamer_mode);
+    }
+
+    #[test]
+    fn config_deserializes_custom_apps_and_streamer_mode() {
+        let toml_str = r#"
+            config_version = 1
+            streamer_mode = true
+
+            [[custom_apps]]
+            id = "blender-1"
+            name = "Blender"
+            process_name = "blender.exe"
+            state = "3D Modeling"
+            details = "Character Rigging"
+            discord_app_id = 987654321
+            enabled = true
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.streamer_mode);
+        assert_eq!(config.custom_apps.len(), 1);
+        let app = &config.custom_apps[0];
+        assert_eq!(app.id, "blender-1");
+        assert_eq!(app.name, "Blender");
+        assert_eq!(app.process_name, "blender.exe");
+        assert_eq!(app.state, "3D Modeling");
+        assert_eq!(app.details, Some("Character Rigging".to_string()));
+        assert_eq!(app.discord_app_id, 987654321);
+        assert!(app.enabled);
     }
 
     #[test]
@@ -564,6 +682,8 @@ mod tests {
                 discord_apps: HashMap::new(),
             },
             presence: PresenceConfig::default(),
+            custom_apps: Vec::new(),
+            streamer_mode: false,
         };
         let toml_str = toml::to_string(&config).unwrap();
         let deserialized: Config = toml::from_str(&toml_str).unwrap();

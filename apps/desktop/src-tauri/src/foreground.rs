@@ -132,6 +132,10 @@ pub fn window_matches_identity(window: &ForegroundWindow, identity: &WindowIdent
 ///
 /// `sources` pairs each registered source name with its declared window
 /// identity. The first source whose identity matches the foreground window
+/// Resolves the foreground window to a registered source name, if any.
+///
+/// `sources` pairs each registered source name with its declared window
+/// identity. The first source whose identity matches the foreground window
 /// is returned. Purely generic: no concrete application is referenced.
 pub fn resolve_foreground_source<'a>(
     window: &ForegroundWindow,
@@ -141,6 +145,161 @@ pub fn resolve_foreground_source<'a>(
         .iter()
         .find(|(_, identity)| window_matches_identity(window, identity))
         .map(|(name, _)| *name)
+}
+
+/// A running Windows desktop application candidate for custom app watching.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RunningProcessView {
+    pub name: String,
+    pub process_name: String,
+    pub window_title: String,
+}
+
+/// Returns the title text of the current foreground window.
+#[cfg(target_os = "windows")]
+pub fn get_foreground_window_title() -> Option<String> {
+    let hwnd = unsafe { winapi::um::winuser::GetForegroundWindow() };
+    if hwnd.is_null() {
+        return None;
+    }
+    let len = unsafe { winapi::um::winuser::GetWindowTextLengthW(hwnd) };
+    if len <= 0 {
+        return None;
+    }
+    let mut title_buf = vec![0u16; (len + 1) as usize];
+    let read = unsafe {
+        winapi::um::winuser::GetWindowTextW(hwnd, title_buf.as_mut_ptr(), title_buf.len() as i32)
+    };
+    if read > 0 {
+        let title = String::from_utf16_lossy(&title_buf[..read as usize])
+            .trim()
+            .to_string();
+        if !title.is_empty() {
+            return Some(title);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn get_foreground_window_title() -> Option<String> {
+    None
+}
+
+/// Enumerates running top-level visible desktop application windows.
+#[cfg(target_os = "windows")]
+pub fn enumerate_running_applications() -> Vec<RunningProcessView> {
+    use std::collections::HashSet;
+    use winapi::shared::minwindef::{BOOL, LPARAM, TRUE};
+    use winapi::shared::windef::HWND;
+    use winapi::um::winuser::{EnumWindows, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible};
+
+    struct WindowCollector {
+        apps: Vec<RunningProcessView>,
+        seen_processes: HashSet<String>,
+    }
+
+    let mut collector = WindowCollector {
+        apps: Vec::new(),
+        seen_processes: HashSet::new(),
+    };
+
+    unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let collector = &mut *(lparam as *mut WindowCollector);
+
+        if IsWindowVisible(hwnd) == 0 {
+            return TRUE;
+        }
+
+        let len = GetWindowTextLengthW(hwnd);
+        if len <= 0 {
+            return TRUE;
+        }
+
+        let mut title_buf = vec![0u16; (len + 1) as usize];
+        let read = GetWindowTextW(hwnd, title_buf.as_mut_ptr(), title_buf.len() as i32);
+        if read <= 0 {
+            return TRUE;
+        }
+
+        let title = String::from_utf16_lossy(&title_buf[..read as usize])
+            .trim()
+            .to_string();
+        if title.is_empty() {
+            return TRUE;
+        }
+
+        let lower = title.to_ascii_lowercase();
+        if lower == "program manager"
+            || lower == "settings"
+            || lower == "windows input experience"
+            || lower == "presencehub"
+        {
+            return TRUE;
+        }
+
+        let mut pid = 0;
+        winapi::um::winuser::GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return TRUE;
+        }
+
+        if let Some(proc_name) = process_base_name(pid) {
+            let proc_lower = proc_name.to_ascii_lowercase();
+            if proc_lower == "explorer.exe"
+                || proc_lower == "searchhost.exe"
+                || proc_lower == "shellexperiencehost.exe"
+                || proc_lower == "startmenuexperiencehost.exe"
+                || proc_lower == "textinputhost.exe"
+                || proc_lower == "applicationframehost.exe"
+                || proc_lower == "presencehub.exe"
+                || proc_lower == "presencehub-desktop.exe"
+            {
+                return TRUE;
+            }
+
+            if collector.seen_processes.insert(proc_lower.clone()) {
+                let friendly_name = proc_lower
+                    .strip_suffix(".exe")
+                    .unwrap_or(&proc_lower)
+                    .replace(['_', '-'], " ");
+                let friendly_name = capitalize_words(&friendly_name);
+
+                collector.apps.push(RunningProcessView {
+                    name: friendly_name,
+                    process_name: proc_lower,
+                    window_title: title,
+                });
+            }
+        }
+
+        TRUE
+    }
+
+    unsafe {
+        EnumWindows(Some(enum_proc), &mut collector as *mut _ as LPARAM);
+    }
+
+    collector.apps.sort_by(|a, b| a.name.cmp(&b.name));
+    collector.apps
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn enumerate_running_applications() -> Vec<RunningProcessView> {
+    Vec::new()
+}
+
+fn capitalize_words(s: &str) -> String {
+    s.split_whitespace()
+        .map(|word| {
+            let mut c = word.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]

@@ -32,8 +32,8 @@ mod context;
 mod core;
 
 pub use config::{
-    Config, ConfigError, OutputConfig, OwnershipPolicy, PluginConfig, PresenceConfig,
-    RuntimeConfig, UnsupportedForegroundPolicy,
+    Config, ConfigError, CustomAppConfig, OutputConfig, OwnershipPolicy, PluginConfig,
+    PresenceConfig, RuntimeConfig, UnsupportedForegroundPolicy,
 };
 pub use context::ApplicationContext;
 pub use core::Core;

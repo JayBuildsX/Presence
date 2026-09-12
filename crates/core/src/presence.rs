@@ -335,11 +335,16 @@ impl From<&Activity> for RichPresence {
         // assets in the Discord application set these so the icon resolves
         // instead of Discord showing a placeholder `?` for an unregistered
         // derived key.
-        let large_image = activity
-            .metadata
-            .get("large_image")
-            .cloned()
-            .or_else(|| large_text.as_deref().map(application_slug));
+        let large_image =
+            if activity.metadata.get("no_large_image").map(|s| s.as_str()) == Some("true") {
+                None
+            } else {
+                activity
+                    .metadata
+                    .get("large_image")
+                    .cloned()
+                    .or_else(|| large_text.as_deref().map(application_slug))
+            };
         let small_image = activity.metadata.get("small_image").cloned();
 
         let mut builder = RichPresence::builder().state(activity.state.clone());
