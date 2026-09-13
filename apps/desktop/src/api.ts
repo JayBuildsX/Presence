@@ -24,6 +24,14 @@ export async function minimizeWindow(): Promise<void> {
   return invoke<void>("minimize_window");
 }
 
+export async function toggleMaximizeWindow(): Promise<boolean> {
+  return invoke<boolean>("toggle_maximize_window");
+}
+
+export async function isWindowMaximized(): Promise<boolean> {
+  return invoke<boolean>("is_window_maximized");
+}
+
 export async function dragWindow(): Promise<void> {
   return invoke<void>("drag_window");
 }

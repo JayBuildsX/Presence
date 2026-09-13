@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
-  "productName": "PresenceHub",
+  "productName": "Presence",
   "version": "0.1.0",
   "identifier": "com.presencehub.app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "PresenceHub",
+        "title": "Presence",
         "width": 440,
         "height": 640,
         "minWidth": 380,

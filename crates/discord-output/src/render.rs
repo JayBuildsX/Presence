@@ -49,15 +49,24 @@ pub fn to_activity_data(presence: &RichPresence) -> ActivityData {
     let timestamps = presence.timestamps.as_ref();
     let assets = presence.assets.as_ref();
 
+    let large_image = assets.and_then(|a| a.large_image.as_deref());
+    let small_image = assets.and_then(|a| a.small_image.as_deref());
+    let large_text = if large_image.is_some() {
+        assets.and_then(|a| a.large_text.as_deref())
+    } else {
+        None
+    };
+    let small_text = assets.and_then(|a| a.small_text.as_deref());
+
     let mut data = build_activity_data(
         presence.state.as_deref().unwrap_or_default(),
         presence.details.as_deref(),
         timestamps.and_then(|t| t.start),
         timestamps.and_then(|t| t.end),
-        assets.and_then(|a| a.large_text.as_deref()),
-        assets.and_then(|a| a.small_text.as_deref()),
-        assets.and_then(|a| a.large_image.as_deref()),
-        assets.and_then(|a| a.small_image.as_deref()),
+        large_text,
+        small_text,
+        large_image,
+        small_image,
     );
 
     data.r#type = activity_type_code(presence.activity_type);
@@ -224,6 +233,25 @@ mod tests {
         );
         // The only application identity available is the asset hover text.
         assert_eq!(json["assets"]["large_text"], "Antigravity");
+    }
+
+    #[test]
+    fn render_omits_large_text_when_large_image_is_absent() {
+        let presence = RichPresence::builder()
+            .state("Standalone Mode")
+            .assets(PresenceAssets {
+                large_image: None,
+                large_text: Some("No Image Title".to_string()),
+                small_image: None,
+                small_text: None,
+            })
+            .build();
+
+        let data = to_activity_data(&presence);
+        assert!(
+            data.assets.is_none(),
+            "assets must be None when no large_image is present"
+        );
     }
 
     #[test]

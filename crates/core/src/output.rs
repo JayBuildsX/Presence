@@ -6,7 +6,7 @@
 //! This module intentionally knows nothing about specific applications
 //! (FL Studio, VS Code, etc.) or specific outputs (Discord, Slack, etc.).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::activity::{Activity, ActivityTimestamps};
@@ -226,6 +226,8 @@ pub struct PresenceEngine {
     displayed: Option<String>,
     /// Manually pinned source that overrides foreground switching when active.
     pinned: Option<String>,
+    /// Sources configured as standalone (no process/window requirement).
+    standalone: HashSet<String>,
     /// Monotonic activity counter used to order sources for the recent
     /// ownership policy.
     recency: u64,
@@ -273,6 +275,7 @@ impl PresenceEngine {
             foreground: None,
             displayed: None,
             pinned: None,
+            standalone: HashSet::new(),
             recency: 0,
         }
     }
@@ -336,6 +339,26 @@ impl PresenceEngine {
             return Vec::new();
         }
         self.pinned = source;
+        self.reconcile()
+    }
+
+    /// Returns the currently registered standalone sources.
+    pub fn standalone_sources(&self) -> &HashSet<String> {
+        &self.standalone
+    }
+
+    /// Sets the standalone sources (plugins with no process/window requirement).
+    ///
+    /// When no supported application is in the foreground, an active standalone
+    /// source takes precedence over lingering background applications.
+    pub fn set_standalone_sources(
+        &mut self,
+        sources: HashSet<String>,
+    ) -> Vec<(usize, OutputError)> {
+        if self.standalone == sources {
+            return Vec::new();
+        }
+        self.standalone = sources;
         self.reconcile()
     }
 
@@ -419,6 +442,7 @@ impl PresenceEngine {
         self.order.clear();
         self.foreground = None;
         self.displayed = None;
+        self.standalone.clear();
         self.recency = 0;
         self.clear_outputs();
     }
@@ -682,6 +706,17 @@ impl PresenceEngine {
                     .foreground
                     .as_deref()
                     .filter(|source| self.is_active(source))
+                {
+                    return Some(source.to_string());
+                }
+
+                // An active standalone source (manual presence created "from thin air")
+                // takes precedence when no supported application is in the foreground.
+                if let Some(source) = self
+                    .order
+                    .iter()
+                    .rev()
+                    .find(|source| self.standalone.contains(*source) && self.is_active(source))
                 {
                     return Some(source.to_string());
                 }
@@ -1870,6 +1905,35 @@ mod tests {
         );
         assert_eq!(engine.current_activity().unwrap().state, "Editing");
         assert_eq!(&*last_state.lock().unwrap(), &Some("Editing".to_string()));
+    }
+
+    #[test]
+    fn ownership_foreground_standalone_source_takes_precedence_over_background() {
+        let (mut engine, _publishes, _clears, _last_state) = tracking_engine();
+
+        // "BackgroundApp" is active and registered first.
+        engine.update("BackgroundApp", &test_activity("Coding"));
+        assert_eq!(engine.displayed_source(), Some("BackgroundApp"));
+
+        // User adds an active standalone presence "Standalone".
+        let mut standalone = HashSet::new();
+        standalone.insert("Standalone".to_string());
+        engine.set_standalone_sources(standalone);
+        engine.update("Standalone", &test_activity("Chilling"));
+
+        // No app in foreground (foreground is None) -> Standalone owns the display!
+        assert_eq!(engine.displayed_source(), Some("Standalone"));
+        assert_eq!(engine.current_activity().unwrap().state, "Chilling");
+
+        // When a real window enters foreground, it takes precedence:
+        engine.set_foreground_source(Some("BackgroundApp"));
+        assert_eq!(engine.displayed_source(), Some("BackgroundApp"));
+        assert_eq!(engine.current_activity().unwrap().state, "Coding");
+
+        // When focus leaves the window, standalone takes over again:
+        engine.set_foreground_source(None);
+        assert_eq!(engine.displayed_source(), Some("Standalone"));
+        assert_eq!(engine.current_activity().unwrap().state, "Chilling");
     }
 
     #[test]

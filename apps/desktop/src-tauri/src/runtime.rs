@@ -269,6 +269,8 @@ impl Runtime {
             "Unsupported-foreground policy configured"
         );
 
+        self.sync_standalone_sources();
+
         // 9. Eagerly probe / connect outputs (Discord IPC) so connection
         // status is live immediately on startup if Discord is already running.
         let _ = self.engine.reconnect_outputs();
@@ -594,6 +596,11 @@ impl Runtime {
             info!(source = %source, "Plugin disabled");
         }
 
+        self.sync_standalone_sources();
+        if enabled {
+            self.poll_once();
+        }
+
         // Mark dirty and persist immediately when due; otherwise the write
         // is deferred to the poll loop so rapid toggles never queue disk
         // I/O behind the runtime lock.
@@ -656,6 +663,8 @@ impl Runtime {
         }
 
         self.config.custom_apps.push(app);
+        self.sync_standalone_sources();
+        self.poll_once();
         self.config_dirty = true;
         self.save_config_now()?;
         Ok(())
@@ -699,6 +708,8 @@ impl Runtime {
         }
 
         self.config.custom_apps[pos] = app;
+        self.sync_standalone_sources();
+        self.poll_once();
 
         self.config_dirty = true;
         self.save_config_now()?;
@@ -720,10 +731,28 @@ impl Runtime {
         self.config.outputs.discord_apps.remove(&app.name);
         self.engine
             .update_output_app_ids(self.config.outputs.discord_apps.clone());
+        self.sync_standalone_sources();
+        self.poll_once();
 
         self.config_dirty = true;
         self.save_config_now()?;
         Ok(())
+    }
+
+    /// Syncs which enabled custom applications have no process name (standalone) with the engine.
+    pub fn sync_standalone_sources(&mut self) {
+        let standalone: std::collections::HashSet<String> = self
+            .config
+            .custom_apps
+            .iter()
+            .filter(|app| {
+                app.enabled
+                    && app.process_name.trim().is_empty()
+                    && !self.host.is_source_disabled(&app.name)
+            })
+            .map(|app| app.name.clone())
+            .collect();
+        self.engine.set_standalone_sources(standalone);
     }
 
     /// Minimum interval between configuration file writes.

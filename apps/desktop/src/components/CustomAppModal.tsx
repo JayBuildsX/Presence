@@ -128,11 +128,7 @@ export default function CustomAppModal({
       setError("Please provide an application name.");
       return;
     }
-    if (!trimmedProc) {
-      setError("Please provide a process name (e.g. blender.exe).");
-      return;
-    }
-    if (!trimmedProc.endsWith(".exe")) {
+    if (trimmedProc && !trimmedProc.endsWith(".exe")) {
       trimmedProc += ".exe";
     }
 
@@ -251,17 +247,17 @@ export default function CustomAppModal({
 
             <div className="form-group flex-1">
               <label htmlFor="process-name-input" className="form-label">
-                Process Name <span className="required-star">*</span>
+                Process Name (Optional)
               </label>
               <input
                 id="process-name-input"
                 type="text"
                 className="form-input font-mono"
-                placeholder="e.g. blender.exe"
+                placeholder="e.g. blender.exe (optional)"
                 value={processName}
                 onChange={(e) => setProcessName(e.target.value)}
-                required
               />
+              <span className="form-help">Leave blank to broadcast presence always (standalone mode).</span>
             </div>
           </div>
 
@@ -307,7 +303,7 @@ export default function CustomAppModal({
               id="discord-id-input"
               type="text"
               className="form-input font-mono"
-              placeholder="Leave empty to use PresenceHub default ID"
+              placeholder="Leave empty to use Presence default ID"
               value={discordAppId}
               onChange={(e) => setDiscordAppId(e.target.value)}
             />
@@ -336,7 +332,7 @@ export default function CustomAppModal({
               </div>
             )}
             <span className="form-help">
-              Leave blank to broadcast under PresenceHub with your app name as Line 1. If you enter your own Discord Application ID, PresenceHub will verify the app and automatically use your <code>logo</code> asset.
+              Leave blank to broadcast under Presence with your app name as Line 1. If you enter your own Discord Application ID, Presence will verify the app and automatically use your <code>logo</code> asset.
             </span>
           </div>
 

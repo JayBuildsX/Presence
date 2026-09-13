@@ -8,3 +8,5 @@ apps/desktop/src-tauri/gen/schemas/
 
 # Logs
 *.log
+*.exe
+*.winmd

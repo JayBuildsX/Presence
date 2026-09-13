@@ -19,10 +19,14 @@ pub struct CustomAppPlugin {
 impl CustomAppPlugin {
     pub fn new(config: CustomAppConfig) -> Self {
         let metadata = PluginMetadata::new(&config.name, "1.0.0");
-        let window_identity = WindowIdentity::new(
-            [config.process_name.to_ascii_lowercase()],
-            Vec::<String>::new(),
-        );
+        let window_identity = if config.process_name.trim().is_empty() {
+            WindowIdentity::new(Vec::<String>::new(), Vec::<String>::new())
+        } else {
+            WindowIdentity::new(
+                [config.process_name.to_ascii_lowercase()],
+                Vec::<String>::new(),
+            )
+        };
         Self {
             config,
             metadata,
@@ -44,10 +48,14 @@ impl CustomAppPlugin {
     #[allow(dead_code)]
     pub fn update_config(&mut self, config: CustomAppConfig) {
         self.metadata = PluginMetadata::new(&config.name, "1.0.0");
-        self.window_identity = WindowIdentity::new(
-            [config.process_name.to_ascii_lowercase()],
-            Vec::<String>::new(),
-        );
+        self.window_identity = if config.process_name.trim().is_empty() {
+            WindowIdentity::new(Vec::<String>::new(), Vec::<String>::new())
+        } else {
+            WindowIdentity::new(
+                [config.process_name.to_ascii_lowercase()],
+                Vec::<String>::new(),
+            )
+        };
         self.config = config;
     }
 }
@@ -58,7 +66,11 @@ impl Plugin for CustomAppPlugin {
     }
 
     fn window_identity(&self) -> Option<WindowIdentity> {
-        Some(self.window_identity.clone())
+        if self.config.process_name.trim().is_empty() {
+            None
+        } else {
+            Some(self.window_identity.clone())
+        }
     }
 
     fn init(&mut self) -> Result<(), PluginError> {
@@ -76,7 +88,11 @@ impl Plugin for CustomAppPlugin {
             return Ok(None);
         }
 
-        let is_running = is_process_running(&self.config.process_name);
+        let is_running = if self.config.process_name.trim().is_empty() {
+            true
+        } else {
+            is_process_running(&self.config.process_name)
+        };
         if !is_running {
             self.session_start = None;
             return Ok(None);

@@ -70,7 +70,11 @@ export default function PluginList({
                 <div className="plugin-info">
                   <div className="plugin-title-row">
                     <span className="plugin-name">{plugin.name}</span>
-                    {plugin.is_custom && <span className="custom-app-badge">Custom</span>}
+                    {plugin.is_custom && (
+                      <span className="custom-app-badge">
+                        {customConfig && !customConfig.process_name?.trim() ? "Standalone" : "Custom"}
+                      </span>
+                    )}
                     {isPrioritized && <span className="priority-badge">★ Priority</span>}
                     {isOwner && <span className="owner-badge">Broadcasting</span>}
                   </div>

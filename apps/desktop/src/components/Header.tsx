@@ -1,6 +1,7 @@
+import { useEffect, useState } from "react";
 import type { LiveState } from "../types";
 import { StatusDot, globalStatus } from "./widgets";
-import { dragWindow, minimizeWindow, closeWindow } from "../api";
+import { dragWindow, minimizeWindow, toggleMaximizeWindow, isWindowMaximized, closeWindow } from "../api";
 
 interface HeaderProps {
   state: LiveState;
@@ -24,6 +25,16 @@ export default function Header({
   isSyncing,
 }: HeaderProps) {
   const status = globalStatus(state);
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    void isWindowMaximized().then(setIsMaximized).catch(() => {});
+    const handleResize = () => {
+      void isWindowMaximized().then(setIsMaximized).catch(() => {});
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     // Only drag on left click and when not clicking a button or interactive child
@@ -32,8 +43,23 @@ export default function Header({
     }
   };
 
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest("button") === null) {
+      void handleToggleMaximize();
+    }
+  };
+
   const handleMinimize = () => {
     void minimizeWindow();
+  };
+
+  const handleToggleMaximize = async () => {
+    try {
+      const next = await toggleMaximizeWindow();
+      setIsMaximized(next);
+    } catch {
+      // fallback
+    }
   };
 
   const handleClose = () => {
@@ -41,7 +67,12 @@ export default function Header({
   };
 
   return (
-    <header className="header" data-tauri-drag-region onMouseDown={handleMouseDown}>
+    <header
+      className="header"
+      data-tauri-drag-region
+      onMouseDown={handleMouseDown}
+      onDoubleClick={handleDoubleClick}
+    >
       <div className="brand">
         <div className="brand-mark" aria-hidden="true">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -49,7 +80,7 @@ export default function Header({
           </svg>
         </div>
         <div className="brand-text">
-          <span className="brand-title">PresenceHub</span>
+          <span className="brand-title">Presence</span>
           <span className="brand-subtitle">Discord Activity</span>
         </div>
       </div>
@@ -160,38 +191,54 @@ export default function Header({
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06-.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         </button>
+      </div>
 
-        <div className="window-controls">
-          <button
-            type="button"
-            className="win-btn win-min"
-            onClick={handleMinimize}
-            title="Minimize"
-            aria-label="Minimize"
-          >
-            <svg width="10" height="1" viewBox="0 0 10 1" fill="currentColor">
-              <rect width="10" height="1" />
+      <div className="window-controls">
+        <button
+          type="button"
+          className="win-btn win-min"
+          onClick={handleMinimize}
+          title="Minimize"
+          aria-label="Minimize"
+        >
+          <svg width="10" height="1" viewBox="0 0 10 1" fill="currentColor">
+            <rect width="10" height="1" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className="win-btn win-max"
+          onClick={handleToggleMaximize}
+          title={isMaximized ? "Restore" : "Maximize"}
+          aria-label={isMaximized ? "Restore" : "Maximize"}
+        >
+          {isMaximized ? (
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <path d="M2.5 1.5h6v6h-6z" />
+              <path d="M1.5 3.5v5h5" />
             </svg>
-          </button>
-          <button
-            type="button"
-            className="win-btn win-close"
-            onClick={handleClose}
-            title="Close"
-            aria-label="Close"
-          >
-            <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <line x1="1" y1="1" x2="11" y2="11" />
-              <line x1="11" y1="1" x2="1" y2="11" />
+          ) : (
+            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <rect x="1" y="1" width="8" height="8" rx="1" />
             </svg>
-          </button>
-        </div>
+          )}
+        </button>
+        <button
+          type="button"
+          className="win-btn win-close"
+          onClick={handleClose}
+          title="Close"
+          aria-label="Close"
+        >
+          <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <line x1="1" y1="1" x2="11" y2="11" />
+            <line x1="11" y1="1" x2="1" y2="11" />
+          </svg>
+        </button>
       </div>
     </header>
   );
 }
-
-

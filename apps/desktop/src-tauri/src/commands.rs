@@ -60,6 +60,25 @@ pub async fn drag_window(window: tauri::Window) -> Result<(), String> {
     window.start_dragging().map_err(|e| e.to_string())
 }
 
+/// Toggles maximize / restore on the application window. Returns whether it is now maximized.
+#[tauri::command]
+pub async fn toggle_maximize_window(window: tauri::Window) -> Result<bool, String> {
+    let is_max = window.is_maximized().map_err(|e| e.to_string())?;
+    if is_max {
+        window.unmaximize().map_err(|e| e.to_string())?;
+        Ok(false)
+    } else {
+        window.maximize().map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+}
+
+/// Returns whether the application window is currently maximized.
+#[tauri::command]
+pub async fn is_window_maximized(window: tauri::Window) -> Result<bool, String> {
+    window.is_maximized().map_err(|e| e.to_string())
+}
+
 /// Reconnects outputs (Discord) and republishes active rich presence.
 ///
 /// Returns the fresh snapshot on success. When still disconnected, returns
@@ -103,7 +122,7 @@ pub async fn set_pinned_source(
     Ok(runtime.snapshot())
 }
 
-/// Returns whether PresenceHub is set to auto-start with Windows.
+/// Returns whether Presence is set to auto-start with Windows.
 #[tauri::command]
 pub async fn get_autostart_status() -> Result<bool, String> {
     let output = std::process::Command::new("reg")
@@ -111,11 +130,25 @@ pub async fn get_autostart_status() -> Result<bool, String> {
             "query",
             r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
             "/v",
-            "PresenceHub",
+            "Presence",
         ])
         .output()
         .map_err(|e| format!("Failed to query registry: {e}"))?;
-    Ok(output.status.success())
+    if output.status.success() {
+        return Ok(true);
+    }
+    // Also check legacy "PresenceHub" key
+    let legacy = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
+            "PresenceHub",
+        ])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    Ok(legacy)
 }
 
 /// Enables or disables auto-start with Windows (with --minimized flag).
@@ -130,7 +163,7 @@ pub async fn set_autostart(enabled: bool) -> Result<bool, String> {
                 "add",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
                 "/v",
-                "PresenceHub",
+                "Presence",
                 "/t",
                 "REG_SZ",
                 "/d",
@@ -142,7 +175,26 @@ pub async fn set_autostart(enabled: bool) -> Result<bool, String> {
         if !status.success() {
             return Err("Failed to add registry entry for auto-start".to_string());
         }
+        // Clean up legacy key if present
+        let _ = std::process::Command::new("reg")
+            .args([
+                "delete",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "PresenceHub",
+                "/f",
+            ])
+            .status();
     } else {
+        let _ = std::process::Command::new("reg")
+            .args([
+                "delete",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "Presence",
+                "/f",
+            ])
+            .status();
         let _ = std::process::Command::new("reg")
             .args([
                 "delete",

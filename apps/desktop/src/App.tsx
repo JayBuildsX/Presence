@@ -54,6 +54,21 @@ export default function App() {
     };
   }, [showToast]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (isCustomAppModalOpen) {
+          setIsCustomAppModalOpen(false);
+          setEditingCustomApp(null);
+        } else if (showSettings) {
+          setShowSettings(false);
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isCustomAppModalOpen, showSettings]);
+
   const refreshState = useCallback(async () => {
     try {
       const next = await getState();
@@ -281,7 +296,7 @@ export default function App() {
         </div>
       )}
       {state === null ? (
-        <div className="loading">Connecting to PresenceHub…</div>
+        <div className="loading">Connecting to Presence…</div>
       ) : (
         <>
           <CurrentPresence state={state} />

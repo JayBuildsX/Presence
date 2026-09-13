@@ -1,4 +1,4 @@
-# PresenceHub
+# Presence
 
 <div align="center">
   <h3>Unified, Multi-Application Discord Rich Presence for DAWs, IDEs & Creative Tools</h3>
@@ -24,13 +24,13 @@
 
 ## Adding Custom Applications
 
-PresenceHub allows you to monitor any executable running on Windows via the **+ Add App** button in the dashboard.
+Presence allows you to monitor any executable running on Windows via the **+ Add App** button in the dashboard.
 
 When adding a custom app, you have two Discord broadcasting options:
 
-### Option 1: Default PresenceHub Broadcasting (Zero Setup)
+### Option 1: Default Presence Broadcasting (Zero Setup)
 Leave the **Custom Discord Application ID** field empty.
-- **Header**: `Playing PresenceHub`
+- **Header**: `Playing Presence`
 - **Line 1 (Top Line)**: `{Your App Name} — {Activity / Window Title}`
 - **Line 2 (Bottom Line)**: `{Your Secondary Details}` (Optional)
 - Your app's display name will always be visible on Discord!
@@ -50,18 +50,18 @@ If you want Discord to display your app's actual name in the profile header (e.g
 1. In the left navigation menu, go to **Rich Presence** → **Art Assets**.
 2. Under **Rich Presence Assets**, click **Add Image(s)**.
 3. Upload your app's logo/icon.
-4. **Important**: Set the asset name / key to `logo` (or `app_logo`). PresenceHub automatically searches for the `logo` asset key when querying Discord's Rich Presence API.
+4. **Important**: Set the asset name / key to `logo` (or `app_logo`). Presence automatically searches for the `logo` asset key when querying Discord's Rich Presence API.
 5. Click **Save Changes** at the bottom of the Discord Developer Portal.
 
-#### Step 3: Connect It in PresenceHub
-1. In PresenceHub, click **+ Add App** (or click the edit pencil icon on an existing custom app).
+#### Step 3: Connect It in Presence
+1. In Presence, click **+ Add App** (or click the edit pencil icon on an existing custom app).
 2. Select your running application from the **Pick from Running Applications** dropdown.
 3. In the **Custom Discord Application ID** field, paste your copied **Application ID**.
-4. PresenceHub will instantly verify your application with Discord, verify the application title, and confirm that your `logo` asset was found.
+4. Presence will instantly verify your application with Discord, verify the application title, and confirm that your `logo` asset was found.
 5. Click **Add Application** / **Save Changes**.
 6. When your app is active, Discord will display:
    - **Header**: `Playing <Your App Name>`
-   - **Logo**: Your custom uploaded `logo` art asset (if no logo was uploaded, PresenceHub avoids broken placeholder icons).
+   - **Logo**: Your custom uploaded `logo` art asset (if no logo was uploaded, Presence avoids broken placeholder icons).
    - **Line 1 (Top Line)**: Active window title or primary activity.
    - **Line 2 (Bottom Line)**: Secondary details (if provided).
 
@@ -80,7 +80,19 @@ Configure custom key combinations in **Settings** → **Shortcuts**:
 
 ---
 
+## Installation & Download
+
+### Quick Download (No Dev Setup Required)
+If you're looking to use Presence without building it from source:
+1. Head over to the **[GitHub Releases](../../releases/latest)** page.
+2. Download the latest Windows installer (`Presence_x64_en-US.msi` or setup `.exe`).
+3. Run the installer and launch Presence from your Start menu or system tray.
+
+---
+
 ## Development & Building
+
+If you want to contribute or build from source:
 
 ### Prerequisites
 - [Rust](https://rustup.rs/) (1.78 or later recommended)
@@ -90,8 +102,8 @@ Configure custom key combinations in **Settings** → **Shortcuts**:
 ### Setup & Run
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/presencehub.git
-cd presencehub
+git clone https://github.com/your-username/presence.git
+cd presence
 
 # Install frontend dependencies
 npm install
@@ -110,7 +122,7 @@ The compiled standalone `.exe` and `.msi` installers will be generated in `src-t
 
 ## Architecture
 
-PresenceHub is structured as a modular Rust workspace:
+Presence is structured as a modular Rust workspace:
 - `crates/core`: Core domain models (`Activity`, `RichPresence`, `PresenceEngine`), session tracking, configuration, and ownership policies.
 - `crates/plugin-host`: Plugin container, dynamic registration, fault isolation, and process polling.
 - `crates/discord-output`: Native asynchronous Discord IPC protocol implementation with zero external Discord SDK dependencies.

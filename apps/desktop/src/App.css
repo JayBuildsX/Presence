@@ -2,26 +2,47 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
-  max-width: 480px;
+  width: 100%;
+  max-width: 960px;
   margin: 0 auto;
   padding: var(--space-4);
   gap: var(--space-4);
   overflow-y: auto;
   overflow-x: hidden;
+  box-sizing: border-box;
 }
+
+.app::-webkit-scrollbar {
+  width: 6px;
+}
+
+.app::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+  transition: background 0.15s ease;
+}
+
+.app::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
 
 /* Header */
 
 .header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: var(--space-2) 0;
   gap: var(--space-2);
   border-bottom: 1px solid var(--border-subtle);
-  padding-bottom: var(--space-3);
+  padding: var(--space-2) 0 var(--space-3) 0;
   user-select: none;
   -webkit-user-select: none;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .brand {
@@ -67,8 +88,11 @@
 .header-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: auto;
 }
 
 .status-badge {
@@ -405,6 +429,14 @@
   gap: var(--space-2);
 }
 
+@media (min-width: 640px) {
+  .plugin-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+    gap: var(--space-2);
+  }
+}
+
 .plugin-card {
   display: flex;
   align-items: center;
@@ -414,12 +446,22 @@
   border-radius: var(--radius);
   padding: var(--space-3) var(--space-4);
   min-height: 64px;
-  transition: all 0.15s ease;
+  box-sizing: border-box;
+  transition: transform 0.16s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.16s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.15s ease,
+              background 0.15s ease;
 }
 
 .plugin-card:hover {
   background: var(--surface-hover);
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.14);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.plugin-card:active {
+  transform: translateY(0);
 }
 
 .plugin-card.is-owner {
@@ -500,6 +542,8 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .owner-badge {
@@ -639,8 +683,9 @@
 .window-controls {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-left: 2px;
+  gap: 3px;
+  margin-left: 6px;
+  flex-shrink: 0;
   -webkit-app-region: no-drag;
 }
 
@@ -656,6 +701,7 @@
   justify-content: center;
   cursor: pointer;
   transition: all 0.15s ease;
+  flex-shrink: 0;
 }
 
 .win-btn:hover {
@@ -666,6 +712,71 @@
 .win-btn.win-close:hover {
   background: var(--error);
   color: #fff;
+}
+
+/* Compact header adaptation for small window sizes (< 680px) */
+@media (max-width: 680px) {
+  .brand-subtitle {
+    display: none;
+  }
+  .header-actions {
+    gap: 4px;
+  }
+  .action-button span {
+    display: none;
+  }
+  .action-button {
+    padding: 4px 8px;
+    height: 28px;
+    box-sizing: border-box;
+  }
+  .status-badge .status-label {
+    display: none;
+  }
+  .status-badge {
+    padding: 2px 6px;
+  }
+  .reconnect-button span {
+    display: none;
+  }
+  .reconnect-button {
+    padding: 2px 6px;
+  }
+  .sync-badge span:not(.sync-spinner) {
+    display: none;
+  }
+}
+
+@media (max-width: 440px) {
+  .header {
+    gap: 4px;
+  }
+  .brand {
+    gap: 6px;
+  }
+  .brand-title {
+    font-size: 13px;
+  }
+  .brand-mark {
+    width: 26px;
+    height: 26px;
+  }
+  .header-actions {
+    gap: 3px;
+    margin-left: 2px;
+  }
+  .window-controls {
+    margin-left: 3px;
+    gap: 2px;
+  }
+  .win-btn {
+    width: 24px;
+    height: 24px;
+  }
+  .icon-button {
+    width: 26px;
+    height: 26px;
+  }
 }
 
 /* Settings & Polling Rate */
@@ -1183,6 +1294,7 @@
   align-items: center;
   gap: 2px;
   margin-right: 4px;
+  flex-shrink: 0;
 }
 
 .card-action-btn {
@@ -1196,6 +1308,7 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  flex-shrink: 0;
   transition: all 0.15s ease;
 }
 

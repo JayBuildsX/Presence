@@ -102,6 +102,8 @@ pub fn run() {
             commands::set_paused,
             commands::set_poll_interval,
             commands::minimize_window,
+            commands::toggle_maximize_window,
+            commands::is_window_maximized,
             commands::drag_window,
             commands::close_window,
             commands::reconnect_discord,
@@ -136,7 +138,7 @@ pub fn run() {
             let show_item = tauri::menu::MenuItem::with_id(
                 app,
                 "show",
-                "Open PresenceHub",
+                "Open Presence",
                 true,
                 None::<&str>,
             )?;
@@ -157,7 +159,7 @@ pub fn run() {
             let quit_item = tauri::menu::MenuItem::with_id(
                 app,
                 "quit",
-                "Quit PresenceHub",
+                "Quit Presence",
                 true,
                 None::<&str>,
             )?;
@@ -173,7 +175,7 @@ pub fn run() {
 
             let _tray = tauri::tray::TrayIconBuilder::with_id("main")
                 .icon(icon)
-                .tooltip("PresenceHub - Starting...")
+                .tooltip("Presence - Starting...")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -344,19 +346,19 @@ pub fn run() {
                         runtime.poll_once();
                         let snapshot = runtime.snapshot();
                         let tooltip = if snapshot.paused {
-                            "PresenceHub: Paused".to_string()
+                            "Presence: Paused".to_string()
                         } else if !snapshot.discord_connected {
-                            "PresenceHub: Discord Disconnected".to_string()
+                            "Presence: Discord Disconnected".to_string()
                         } else if let Some(ref current) = snapshot.current {
                             let mut text =
-                                format!("PresenceHub: {} — {}", current.source, current.state);
+                                format!("Presence: {} — {}", current.source, current.state);
                             if text.len() > 60 {
                                 text.truncate(57);
                                 text.push_str("...");
                             }
                             text
                         } else {
-                            "PresenceHub: Watching (Idle)".to_string()
+                            "Presence: Watching (Idle)".to_string()
                         };
                         (runtime.poll_interval(), tooltip)
                     };
@@ -371,7 +373,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("failed to build PresenceHub window")
+        .expect("failed to build Presence window")
         .run(|app, event| {
             // Synchronous shutdown on exit so Discord presence is cleared.
             if let tauri::RunEvent::Exit = event {
@@ -379,7 +381,7 @@ pub fn run() {
                 tauri::async_runtime::block_on(async {
                     state.runtime.lock().await.shutdown();
                 });
-                info!("PresenceHub exited");
+                info!("Presence exited");
             }
         });
 }

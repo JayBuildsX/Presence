@@ -42,7 +42,7 @@ const DEFAULT_SHORTCUTS: ShortcutConfig[] = [
   {
     id: "toggle_window",
     action: "Show / Hide Window",
-    desc: "Toggles PresenceHub between screen and system tray",
+    desc: "Toggles Presence between screen and system tray",
     keys: ["Ctrl", "Shift", "H"],
     defaultKeys: ["Ctrl", "Shift", "H"],
   },
@@ -222,7 +222,7 @@ export default function Settings({
             <div className="settings-info">
               <span className="settings-title">Polling Frequency</span>
               <span className="settings-desc">
-                How often PresenceHub checks active apps and updates Discord
+                How often Presence checks active apps and updates Discord
               </span>
             </div>
           </div>
