@@ -102,7 +102,7 @@ If you want to contribute or build from source:
 ### Setup & Run
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/presence.git
+git clone https://github.com/JayBuildsX/presence.git
 cd presence
 
 # Install frontend dependencies
